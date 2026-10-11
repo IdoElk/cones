@@ -326,8 +326,10 @@ fn a_scheduled_job_is_created_edited_and_deleted_leaving_the_rest_of_the_file_as
             .contains("release-notes")
     );
     d.press("ctrl+x", CTRL_X);
-    let screen = d.wait_text("job release-notes deleted · install failed");
-    assert!(!screen.contains("release-notes  "), "{screen}");
+    // The status is set at once; the list redraws when the reload lands.
+    let screen = d.wait_for("the deleted row gone", |s| {
+        s.contains("job release-notes deleted · install failed") && !s.contains("release-notes  ")
+    });
     // The job column keeps the width the longer name gave it.
     assert!(
         screen.contains("◆  ✻  -       triage         0 3 * * *      success"),
