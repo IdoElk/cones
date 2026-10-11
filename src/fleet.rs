@@ -81,6 +81,10 @@ pub struct Session {
     /// monitor, in its own words; `None` when it reports none at all. See docs/harness.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tasks: Option<Vec<String>>,
+    /// Who serves and bills the session: a cloud such as `bedrock` or `vertex`, the provider
+    /// the harness names, or the signed-in account's plan, such as `max`. See docs/harness.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,8 +291,47 @@ pub fn sessions(claude: &Path) -> Result<Vec<Session>> {
     let live: HashSet<&str> = out.iter().map(|s| s.session_id.as_str()).collect();
     let settled = settled(claude, &live, true);
     out.extend(settled);
+    if out.iter().any(|s| s.plan.as_deref() == Some(ANTHROPIC)) {
+        let plan = account_plan(claude);
+        for s in out
+            .iter_mut()
+            .filter(|s| s.plan.as_deref() == Some(ANTHROPIC))
+        {
+            s.plan = Some(plan.clone());
+        }
+    }
     sort(&mut out);
     Ok(out)
+}
+
+const ANTHROPIC: &str = "anthropic";
+
+/// The plan of the account Claude is signed in to: `oauthAccount.organizationType` without its
+/// `claude_` prefix, such as `max`, or `api` when no account is signed in. Claude keeps
+/// `.claude.json` inside a custom config folder, else beside the default one, and the default
+/// folder can hold a leftover one naming no account, so the first that names one is read.
+// ponytail: account-wide; a session started with ANTHROPIC_API_KEY under a signed-in account shows the account's plan.
+fn account_plan(claude: &Path) -> String {
+    [
+        claude.join(".claude.json"),
+        claude.with_file_name(".claude.json"),
+    ]
+    .into_iter()
+    .filter_map(|p| serde_json::from_slice::<Value>(&fs::read(p).ok()?).ok())
+    .find_map(|config| {
+        let kind = config["oauthAccount"]["organizationType"].as_str()?;
+        Some(kind.strip_prefix("claude_").unwrap_or(kind).to_owned())
+    })
+    .unwrap_or_else(|| "api".into())
+}
+
+/// A provider id as the plan column shows it: the cloud for a cloud-hosted one, else verbatim.
+pub fn provider_plan(provider: &str) -> String {
+    match provider {
+        "amazon-bedrock" => "bedrock".into(),
+        p if p.starts_with("google-vertex") => "vertex".into(),
+        p => p.into(),
+    }
 }
 
 /// Whether a folder holds a path: the same place, or somewhere under it. Both sides are
@@ -734,6 +777,7 @@ fn build(
             .map(|m| m == "bypassPermissions"),
         usage: None,
         tasks: tasks(job),
+        plan: d.report.plan,
         title: d
             .title
             .or_else(|| {
@@ -1131,6 +1175,8 @@ struct Report {
     tokens_out: Option<u64>,
     context: Option<u64>,
     model: Option<String>,
+    /// The latest response's endpoint, from its message id; first-party is `anthropic`.
+    plan: Option<String>,
     started: Option<DateTime<Utc>>,
     last_activity: Option<DateTime<Utc>>,
     /// The folder the latest line reports, which EnterWorktree and ExitWorktree move.
@@ -1357,10 +1403,19 @@ fn report_with_activity(
         if model == Some("<synthetic>") {
             continue;
         }
-        if let Some(id) = message["id"].as_str()
-            && !seen.insert(id.to_owned())
-        {
-            continue;
+        if let Some(id) = message["id"].as_str() {
+            // Bedrock and Vertex mark the ids of the responses they serve.
+            r.plan = Some(
+                match id.split('_').nth(1) {
+                    Some("bdrk") => "bedrock",
+                    Some("vrtx") => "vertex",
+                    _ => ANTHROPIC,
+                }
+                .into(),
+            );
+            if !seen.insert(id.to_owned()) {
+                continue;
+            }
         }
         let n = |k: &str| u[k].as_u64().unwrap_or(0);
         let prompt =
@@ -2485,6 +2540,7 @@ mod tests {
             bypass: None,
             usage: None,
             tasks: None,
+            plan: None,
             coordinator: false,
             forked_from: None,
             forked_from_harness: None,

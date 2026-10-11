@@ -295,6 +295,9 @@ pub(crate) fn columns_priced(
              ORDER BY time_created, id"
         ),
     )? {
+        if let Some(provider) = v["providerID"].as_str() {
+            columns.plan = Some(crate::fleet::provider_plan(provider));
+        }
         if let Some(model) = v["modelID"].as_str() {
             columns.model = Some(match v["providerID"].as_str() {
                 Some(provider) => format!("{provider}/{model}"),
@@ -585,6 +588,7 @@ pub fn rows(home: &Path, procs: &[Process]) -> Result<Vec<Session>> {
                 bypass: None,
                 usage: None,
                 tasks: None,
+                plan: report.plan,
                 coordinator: false,
                 forked_from: None,
                 forked_from_harness: None,

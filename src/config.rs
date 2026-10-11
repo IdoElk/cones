@@ -422,7 +422,7 @@ pub fn check_confirm_secs(secs: f64) -> Result<()> {
     Ok(())
 }
 
-pub const COLUMNS: [&str; 18] = [
+pub const COLUMNS: [&str; 19] = [
     "harness",
     "state",
     "model",
@@ -441,6 +441,7 @@ pub const COLUMNS: [&str; 18] = [
     "children",
     "tasks",
     "bypass",
+    "plan",
 ];
 pub const DEFAULT_COLUMNS: [&str; 10] = [
     "state",

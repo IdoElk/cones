@@ -1227,3 +1227,75 @@ fn tasks_shows_what_claude_reports_and_children_counts_processes() {
     assert_eq!(cells("Just talking"), ["-", "0"], "{screen}");
     d.quit();
 }
+
+/// `plan` names the cloud whose response ids a session carries, Bedrock's `msg_bdrk_` and
+/// Vertex's `msg_vrtx_`, and for a first-party response the signed-in account's plan from
+/// `.claude.json`, past a leftover one that names no account. A session with no response yet
+/// shows `-`.
+#[test]
+fn plan_shows_the_cloud_or_the_signed_in_account_plan() {
+    let mut d = Dashboard::new("claude-plan-column", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    let project = real_project(&d);
+    let mut seeded = Vec::new();
+    for (minute, title, id) in [
+        (1, "On bedrock", Some("msg_bdrk_abc")),
+        (2, "On vertex", Some("msg_vrtx_abc")),
+        (3, "On the account", Some("msg_01abc")),
+        (4, "Not answered", None),
+    ] {
+        let s = seed(&d, &project, minute, title, "idle", None);
+        if let Some(message) = id {
+            let transcript = fs::read_dir(d.home().join(".claude/projects"))
+                .unwrap()
+                .map(|e| e.unwrap().path().join(format!("{}.jsonl", s.id)))
+                .find(|p| p.is_file())
+                .unwrap();
+            let reply = json!({"type": "assistant", "sessionId": s.id,
+                "timestamp": format!("2026-10-01T09:{minute:02}:30.000Z"),
+                "message": {"id": message, "model": "claude-opus-5-5", "role": "assistant",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "content": [{"type": "text", "text": "done"}]}});
+            let mut text = fs::read_to_string(&transcript).unwrap();
+            text.push_str(&format!("{reply}\n"));
+            fs::write(&transcript, text).unwrap();
+        }
+        seeded.push(s);
+    }
+    fs::write(
+        d.home().join(".claude.json"),
+        json!({"oauthAccount": {"organizationType": "claude_max"}}).to_string(),
+    )
+    .unwrap();
+    // A leftover config inside the default folder names no account and must not hide it.
+    fs::write(
+        d.home().join(".claude/.claude.json"),
+        json!({"userID": "abc"}).to_string(),
+    )
+    .unwrap();
+    let yaml = fs::read_to_string(d.path("jobs.yaml")).unwrap();
+    fs::write(
+        d.path("jobs.yaml"),
+        format!("{yaml}columns: [state, plan]\n"),
+    )
+    .unwrap();
+    d.start();
+    let screen = d.wait_text("bedrock");
+    d.capture("plan");
+    assert!(line_of(&screen, "title").contains("plan"), "{screen}");
+    let plan = |title: &str| -> String {
+        let line = line_of(&screen, title);
+        let list = line.split('│').next().unwrap();
+        list.split("  ")
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .last()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(plan("On bedrock"), "bedrock", "{screen}");
+    assert_eq!(plan("On vertex"), "vertex", "{screen}");
+    assert_eq!(plan("On the account"), "max", "{screen}");
+    assert_eq!(plan("Not answered"), "-", "{screen}");
+    d.quit();
+}

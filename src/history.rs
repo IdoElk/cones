@@ -64,6 +64,8 @@ pub struct Columns {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_in: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_out: Option<u64>,
@@ -1066,6 +1068,7 @@ fn codex_columns_priced(path: &Path, catalog: Option<&crate::cost::Catalog>) -> 
     Ok(Columns {
         title,
         model: tail.model,
+        plan: tail.plan,
         tokens_in: tail.tokens_in,
         tokens_out: tail.tokens_out,
         context_tokens: tail.context_tokens,

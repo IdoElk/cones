@@ -45,6 +45,8 @@ pub struct Tail {
     /// State from the latest message role and assistant `stopReason`.
     pub state: Option<&'static str>,
     pub model: Option<String>,
+    /// The latest assistant message's `provider`.
+    pub plan: Option<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
     /// Latest prompt size: input plus cacheRead and cacheWrite.
@@ -213,6 +215,9 @@ pub(crate) fn tail_priced(lines: &str, catalog: Option<&crate::cost::Catalog>) -
             if let Some(model) = m["model"].as_str() {
                 t.model = Some(model.to_owned());
             }
+            if let Some(provider) = m["provider"].as_str() {
+                t.plan = Some(crate::fleet::provider_plan(provider));
+            }
             let u = &m["usage"];
             let n = |k: &str| u[k].as_u64().unwrap_or(0);
             let prompt = n("input") + n("cacheRead") + n("cacheWrite");
@@ -351,6 +356,7 @@ fn row(p: &Process, file: Option<(PathBuf, Meta)>) -> Session {
         bypass: Some(true),
         usage: None,
         tasks: None,
+        plan: t.plan,
         coordinator: false,
         forked_from: None,
         forked_from_harness: None,

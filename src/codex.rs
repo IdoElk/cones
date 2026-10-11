@@ -90,6 +90,8 @@ pub struct Tail {
     pub effort: Option<String>,
     /// Whether `turn_context.approval_policy` on the last turn is `never`.
     pub bypass: Option<bool>,
+    /// `session_meta.model_provider`, or for OpenAI the ChatGPT plan its rate limits report.
+    pub plan: Option<String>,
     /// Latest `total_token_usage`: input includes cache hits; context uses `last_token_usage.total_tokens`.
     pub tokens_in: Option<u64>,
     pub tokens_out: Option<u64>,
@@ -474,6 +476,14 @@ impl Tail {
                 .headline(&v)
             {
                 t.last = Some(first);
+            }
+            if v["type"] == "session_meta"
+                && let Some(provider) = payload["model_provider"].as_str()
+            {
+                t.plan = Some(crate::fleet::provider_plan(provider));
+            }
+            if let Some(plan) = payload["rate_limits"]["plan_type"].as_str() {
+                t.plan = Some(plan.to_owned());
             }
             if v["type"] == "turn_context" {
                 if let Some(model) = v["payload"]["model"].as_str() {
@@ -871,6 +881,7 @@ pub fn rows(codex: &Path, procs: &[Process]) -> Vec<Session> {
                 bypass: t.bypass,
                 usage: None,
                 tasks: None,
+                plan: t.plan,
                 started: Some(p.started),
                 pid: Some(p.pid),
                 transcript_path: rollout.map(|(path, _)| path.clone()),
@@ -1034,6 +1045,7 @@ pub(crate) fn thread_rows_observed(
                 // A saved launch the daemon no longer holds is detached, and reports no process.
                 usage: record.is_none().then_some(held).flatten(),
                 tasks: None,
+                plan: tail.plan,
                 started: meta
                     .as_ref()
                     .map(|m| m.started)
