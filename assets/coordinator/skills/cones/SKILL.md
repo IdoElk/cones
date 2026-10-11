@@ -67,8 +67,11 @@ and the full reference. Read it first whenever the owner wants to change:
 - scheduled work: adding, changing or removing a job, its schedule, timeout or notifications.
 
 Its rules cover setting one value, editing the file by hand and validating it, and when a
-changed job needs its schedule reinstalled; follow them rather than guessing. Settings inside a
-harness itself, such as its own config files, belong to that harness and are not cones'.
+changed job needs its schedule reinstalled; follow them rather than guessing. After editing
+a job, run `cones config --check`, then `cones __install` if you added, removed, renamed or
+rescheduled one: its LaunchAgent carries the name and schedule, and reads the rest of the job
+at run time. Settings inside a harness itself, such as its own config files, belong to that
+harness and are not cones'.
 
 ## Reporting a problem
 
