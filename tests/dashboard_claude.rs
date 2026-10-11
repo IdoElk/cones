@@ -1120,6 +1120,20 @@ fn every_claude_start_follows_the_skip_permissions_setting() {
         d.wait_text("ctrl+z back");
         d.press("ctrl+z", b"\x1a");
         d.wait_for("the list focused", |s| !s.contains("ctrl+z back"));
+        // The fixture resumes under a new id, and that row can land under the cursor after
+        // ctrl+z; fork the old conversation once it is listed.
+        d.wait_for("the resumed copy listed", |s| {
+            s.matches("Fixture title for the launch").count() >= 3
+        });
+        for _ in 0..12 {
+            if selected(&d.screen()).contains("Old tree work") {
+                break;
+            }
+            d.press("down", DOWN);
+        }
+        d.wait_for("the old conversation selected", |s| {
+            selected(s).contains("Old tree work")
+        });
         d.press("ctrl+y", CTRL_Y);
         d.wait_text("fork to");
         d.press("enter", b"\r");
