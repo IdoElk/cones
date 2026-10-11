@@ -1095,10 +1095,12 @@ fn coordinator_start_fails_while_the_folder_has_a_live_coordinator() {
     assert!(!f.state.join("coordinator/plugin").exists());
 }
 
-/// Attaching to a Claude session that is no longer running resumes it with the skip
-/// setting a new session would get.
+/// Attaching to a Claude session that is no longer running resumes it without flags while
+/// Claude still holds its job record: the job keeps its saved options, and Claude 2.1.296
+/// answers flags with a copy under a new id while the attach revives the original.
+/// A run's resume, which has no record here, keeps the skip setting.
 #[test]
-fn attach_resumes_a_stopped_session_with_the_skip_permissions_setting() {
+fn attach_resumes_a_held_job_without_flags_whatever_the_skip_setting() {
     for skip in [true, false] {
         let f = Fixture::new("ok", 5.0);
         if !skip {
@@ -1148,10 +1150,9 @@ fn attach_resumes_a_stopped_session_with_the_skip_permissions_setting() {
             printed.contains(&format!("'--bg' '--resume' '{session}'")),
             "{printed}"
         );
-        assert_eq!(
-            printed.contains("'--dangerously-skip-permissions'"),
-            skip,
-            "{printed}"
+        assert!(
+            !printed.contains("'--dangerously-skip-permissions'"),
+            "skip={skip}: {printed}"
         );
     }
 }

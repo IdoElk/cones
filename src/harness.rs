@@ -885,7 +885,7 @@ pub fn resume_history(
     let flags = skip_permissions(spec.kind, policy);
     let mut command = match spec.commands.resume_handler {
         spec::Resume::BackgroundThenAttach => {
-            claude_resume(&entry.key.session_id, &entry.cwd, flags)?
+            claude_resume(&entry.key.home, &entry.key.session_id, &entry.cwd, flags)?
         }
         spec::Resume::CodexRemote => {
             codex_resume(&entry.key.home, &entry.key.session_id, &entry.cwd, flags)?
@@ -1262,6 +1262,7 @@ impl Harness for Claude {
         policy: &Policy,
     ) -> Result<std::process::Command> {
         claude_resume(
+            &crate::fleet::claude_dir()?,
             session_id,
             cwd,
             skip_permissions(HarnessKind::Claude, policy),
@@ -1294,8 +1295,22 @@ impl Harness for Claude {
 }
 
 /// Resume in the background so ctrl+z detaches without suspending the agent.
-fn claude_resume(session_id: &str, cwd: &Path, flags: &[String]) -> Result<std::process::Command> {
+fn claude_resume(
+    home: &Path,
+    session_id: &str,
+    cwd: &Path,
+    flags: &[String],
+) -> Result<std::process::Command> {
     uuid::Uuid::parse_str(session_id)?;
+    // A job Claude still holds keeps its saved options. Claude 2.1.296 answers flags on such a
+    // resume with a copy under a new id, and the attach below then revives the original too:
+    // two agents on one conversation. Without a record, the flags are the session's only source.
+    let held = home
+        .join("jobs")
+        .join(&session_id[..8])
+        .join("state.json")
+        .is_file();
+    let flags = if held { &[] } else { flags };
     let spec = spec(HarnessKind::Claude);
     check_operation(spec, &spec.operations.resume, "resume")?;
     Ok(then_exec(
