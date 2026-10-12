@@ -653,6 +653,9 @@ pub struct Launch {
     /// AWS_PROFILE and AWS_REGION are not declared here: every harness resolves
     /// AWS the same way, so cones passes them to all of them.
     pub bedrock: Option<String>,
+    /// Empty when the harness has no way to open an interactive session with an
+    /// instruction; a launch that carries one is then refused.
+    #[serde(default)]
     pub prompt: Vec<String>,
     #[serde(default)]
     pub stdin_prompt: bool,
@@ -1130,14 +1133,17 @@ impl HarnessSpec {
             validate_args(&launch.prompt, &["prompt"])?;
             let named_prompt =
                 self.kind == HarnessKind::Opencode && launch.prompt == ["--prompt", "{prompt}"];
+            let no_prompt =
+                launch.prompt.is_empty() && launch.prompt_flag.is_none() && !launch.stdin_prompt;
             ensure!(
-                launch.prompt.last().map(String::as_str) == Some("{prompt}")
-                    && launch.prompt.iter().filter(|a| *a == "{prompt}").count() == 1
-                    && (launch.prompt.iter().any(|a| a == "--")
-                        || named_prompt
-                        || launch.prompt_flag.is_some()
-                        || launch.stdin_prompt),
-                "launch must pass one prompt after --, or OpenCode's --prompt"
+                no_prompt
+                    || launch.prompt.last().map(String::as_str) == Some("{prompt}")
+                        && launch.prompt.iter().filter(|a| *a == "{prompt}").count() == 1
+                        && (launch.prompt.iter().any(|a| a == "--")
+                            || named_prompt
+                            || launch.prompt_flag.is_some()
+                            || launch.stdin_prompt),
+                "launch must pass one prompt after --, or OpenCode's --prompt, or declare none"
             );
             for flag in [
                 &launch.model,

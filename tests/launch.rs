@@ -3,6 +3,7 @@
 use serde_json::Value;
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
     time::{Duration, Instant},
@@ -27,7 +28,7 @@ impl Fixture {
             fs::create_dir_all(path.join(dir)).unwrap();
         }
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_harness.py");
-        for name in ["claude", "pi", "codex"] {
+        for name in ["claude", "pi", "codex", "kimi"] {
             let target = path.join(".local/bin").join(name);
             std::os::unix::fs::symlink(&fixture, &target).unwrap();
         }
@@ -49,13 +50,43 @@ impl Fixture {
     /// cones scan the machine's Codex clients too, so these tests select rows by the ids and
     /// the folder they created.
     fn codex() -> Self {
-        let f = Self::new();
+        let f = Self::offering("codex");
         fs::create_dir_all(f.codex_home()).unwrap();
+        f
+    }
+
+    /// The same fixture offering `harness` alone.
+    fn offering(harness: &str) -> Self {
+        let f = Self::new();
         let offered = fs::read_to_string(&f.jobs).unwrap().replace(
-            "codex_enabled: false",
+            &format!("{harness}_enabled: false"),
             "claude_enabled: false\n  pi_enabled: false",
         );
         fs::write(&f.jobs, offered).unwrap();
+        f
+    }
+
+    /// Copilot as npm installs it: a loader on the launch path that waits on the native
+    /// binary of a platform package, which `platform` places relative to the loader's own.
+    fn copilot(platform: &str) -> Self {
+        let f = Self::offering("copilot");
+        let package = f.path().join(".local/lib/node_modules/@github/copilot");
+        let native = package.join(platform);
+        fs::create_dir_all(&native).unwrap();
+        let loader = package.join("npm-loader.js");
+        fs::write(
+            &loader,
+            "#!/usr/bin/python3\nimport glob, os, subprocess, sys\n\
+             here = os.path.dirname(os.path.realpath(__file__))\n\
+             native = glob.glob(here + '/../copilot-darwin-*/copilot') + \
+             glob.glob(here + '/node_modules/@github/copilot-darwin-*/copilot')\n\
+             sys.exit(subprocess.call([native[0], *sys.argv[1:]]))\n",
+        )
+        .unwrap();
+        fs::set_permissions(&loader, fs::Permissions::from_mode(0o755)).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_harness.py");
+        std::os::unix::fs::symlink(fixture, native.join("copilot")).unwrap();
+        std::os::unix::fs::symlink(&loader, f.path().join(".local/bin/copilot")).unwrap();
         f
     }
 
@@ -494,6 +525,101 @@ fn a_launch_with_no_prompt_detaches_and_is_named_like_any_other() {
             );
         }
     }
+}
+
+#[test]
+fn a_copilot_launch_is_one_row_for_its_native_client_wherever_npm_put_it() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    // Beside the loader's package, and nested inside it as Copilot 1.0.95 installs.
+    for platform in [
+        format!("../copilot-darwin-{arch}"),
+        format!("node_modules/@github/copilot-darwin-{arch}"),
+    ] {
+        let f = Fixture::copilot(&platform);
+        let out = f.launch("ok", "copilot", "tidy the imports");
+        assert!(out.status.success(), "{platform}: {}", stderr(&out));
+        let id = stdout(&out);
+        let hosted = f.hosted_pids();
+        assert_eq!(hosted.len(), 1, "{platform}: {hosted:?}");
+        let pid = hosted[0];
+        assert_eq!(id, format!("copilot-{pid}"), "{platform}");
+
+        // The loader waits on a second process of the same name. Hosting it would list
+        // one agent twice, and only the loader's row would stop.
+        let rows = f.rows();
+        let copilot: Vec<&Value> = rows
+            .iter()
+            .filter(|r| r["session"]["harness"] == "copilot")
+            .collect();
+        assert_eq!(copilot.len(), 1, "{platform}: {copilot:?}");
+        assert_eq!(copilot[0]["session"]["session_id"], id.as_str());
+        assert_eq!(copilot[0]["session"]["pid"].as_u64(), Some(u64::from(pid)));
+        assert_eq!(copilot[0]["session"]["title"], "tidy the imports");
+
+        // The returned id is the one `cones stop` takes, and stopping leaves nothing behind.
+        let stopped = f.cones("ok", &["stop", &id]);
+        assert!(stopped.status.success(), "{platform}: {}", stderr(&stopped));
+        wait_until("the native client to exit", || !alive(pid));
+        assert_eq!(f.hosted_pids(), [] as [u32; 0], "{platform}");
+        assert_eq!(f.rows(), [] as [Value; 0], "{platform}");
+    }
+}
+
+#[test]
+fn a_harness_with_no_interactive_instruction_refuses_one_and_starts_without() {
+    // Kimi 2 prints a `--prompt` answer and exits, and refuses the flag beside `--auto`, so
+    // an instruction would start a client that is gone before anyone opens it.
+    let f = Fixture::offering("kimi");
+    for extra in [&[][..], &["--print-command"][..]] {
+        let mut args = vec!["launch", "--dir", f.work.to_str().unwrap()];
+        args.extend(["--harness", "kimi"]);
+        args.extend(extra);
+        args.push("fix the parser");
+        let out = f.cones("ok", &args);
+        assert!(!out.status.success(), "{extra:?}: {}", stdout(&out));
+        assert_eq!(
+            stdout(&out),
+            "",
+            "{extra:?}: an id or a command was printed"
+        );
+        assert!(
+            stderr(&out).contains("kimi cannot open an interactive session with an instruction"),
+            "{extra:?}: {}",
+            stderr(&out)
+        );
+    }
+    assert!(f.recovery().is_empty(), "a refused launch was recorded");
+    assert!(
+        f.hosted_pids().is_empty(),
+        "a refused launch started a client"
+    );
+
+    let out = f.cones(
+        "ok",
+        &[
+            "launch",
+            "--dir",
+            f.work.to_str().unwrap(),
+            "--harness",
+            "kimi",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let hosted = f.hosted_pids();
+    assert_eq!(hosted.len(), 1, "{hosted:?}");
+    assert_eq!(stdout(&out), format!("kimi-{}", hosted[0]));
+    let rows = f.rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["session"]["session_id"], stdout(&out).as_str());
+    assert_eq!(rows[0]["session"]["harness"], "kimi");
+    assert!(alive(hosted[0]), "the waiting client was not left running");
 }
 
 #[test]
