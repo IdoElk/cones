@@ -14057,7 +14057,7 @@ impl App {
             Kind::NewFolder => self.add_folder(),
             Kind::Suggestion(_, dir) => {
                 let dir = dir.clone();
-                self.add_suggestion(dir);
+                self.take_suggestion(dir);
             }
             Kind::Folder(dir) => {
                 self.status = format!("type an instruction · enter starts a session in {dir}");
@@ -14975,11 +14975,11 @@ impl App {
         self.rows.splice(at + 1..at + 1, rows);
     }
 
-    /// Open an offered folder through the same path a typed one takes, so a folder that is
-    /// gone reports itself rather than being opened.
-    fn add_suggestion(&mut self, dir: String) {
+    /// Take an offered folder into the input, where it can be typed past or opened with a
+    /// second Enter through the path a typed one takes.
+    fn take_suggestion(&mut self, dir: String) {
         self.folder = Input::new(dir);
-        self.add_folder();
+        self.select_row("new folder");
     }
 
     /// Open the folder typed on the last row and move the cursor to where it sorted.
@@ -15043,7 +15043,7 @@ impl App {
         let mut cells = vec![("+ ".to_owned(), lit())];
         cells.extend(
             self.folder
-                .spans("add folder · a path, tab completes")
+                .spans("add folder · a path to start work in")
                 .into_iter()
                 .map(|span| (span.content.into_owned(), span.style)),
         );
@@ -15391,7 +15391,7 @@ impl App {
                 compact(keys)
             }
             Mode::Normal if self.on_suggestion().is_some() => {
-                hints(&[("enter", "add folder"), ("tab", "next"), ("esc", "back")])
+                hints(&[("enter", "take"), ("tab", "next"), ("esc", "back")])
             }
             Mode::Normal if self.on_new_folder() => {
                 let mut keys = vec![("enter", "add folder")];
@@ -16035,10 +16035,10 @@ impl App {
                         return Ok(false);
                     }
                 } else if let Some(dir) = self.on_suggestion() {
-                    // An offer is pinned the way a typed path is; the rest returns to the input.
+                    // Enter fills the input with the offer; the rest returns to the input too.
                     match action {
                         KeyAction::Enter => {
-                            self.add_suggestion(dir);
+                            self.take_suggestion(dir);
                             return Ok(false);
                         }
                         // Tab walks the offers and wraps, as a shell's completion menu does.

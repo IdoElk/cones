@@ -203,8 +203,9 @@ paths use the dashboard's cwd. The directories the path could still become are l
 the row as it is typed, up to twelve; hidden names require a `.` prefix. Tab completes as a
 shell's menu does: it grows the path to the longest shared prefix and adds the `/` to a
 complete name such as `~` or `..`, and once the path cannot grow it walks the listed folders,
-wrapping at the end. On a listed folder Enter opens it, `/` or any other character takes it
-into the input to keep typing from, and Escape returns to the input. Enter on the input
+wrapping at the end. On a listed folder Enter takes it into the input, where the folders
+under it are listed and a second Enter opens it; `/` or any other character takes it and
+keeps typing, and Escape returns to the input. Enter on the input
 opens the typed folder and selects it, or its first session when it has any. A path that
 does not exist asks first; a second Enter creates it with its parents, any other key keeps
 typing. Other invalid paths retain the input. Escape clears it.

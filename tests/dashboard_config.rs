@@ -455,12 +455,20 @@ fn a_pinned_folder_is_offered_under_add_folder_until_it_is_open() {
     d.capture("pin-not-a-row");
     assert!(!screen.contains(&extra), "{screen}");
 
-    // `+ add folder` offers it, and Enter on the offer opens it.
+    // `+ add folder` offers it; Enter takes the offer into the input and a second opens it.
     select(&mut d, DOWN, "+ add folder", |l, _| l.contains("+ "));
     let screen = d.wait_text(&extra);
     d.capture("offered");
     assert_eq!(screen.matches(&extra).count(), 1, "{screen}");
     select(&mut d, DOWN, "the offer", |l, _| l.contains(&extra));
+    d.press("enter", b"\r");
+    d.wait_for("the taken offer", |s| {
+        selected(s).contains(&format!("+ {extra}"))
+    });
+    assert!(
+        !empty_folder_row(&d.screen(), &real),
+        "one Enter only fills"
+    );
     d.press("enter", b"\r");
     let screen = d.wait_for("the opened folder's row", |s| empty_folder_row(s, &real));
     d.capture("opened");
@@ -526,10 +534,19 @@ fn add_folder_completes_like_a_shell_and_creates_a_missing_folder_after_asking()
         d.wait_for(name, |s| selected(s).contains(name));
     }
     let screen = d.capture("walked");
-    assert!(
-        line(&screen, "enter add folder").contains("tab next"),
-        "{screen}"
-    );
+    assert!(line(&screen, "enter take").contains("tab next"), "{screen}");
+
+    // Enter takes the selected folder into the input without opening it.
+    d.press("enter", b"\r");
+    d.wait_for("the taken folder", |s| selected(s).contains("+ alps/"));
+    assert!(!d.screen().contains("added"), "one Enter only fills");
+    for _ in 0..2 {
+        d.press("backspace", BACKSPACE);
+    }
+    for name in ["alpha/", "alps/"] {
+        d.press("tab", b"\t");
+        d.wait_for(name, |s| selected(s).contains(name));
+    }
 
     // A typed slash takes the selected folder into the input.
     d.typed("/");
