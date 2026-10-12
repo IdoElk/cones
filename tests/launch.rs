@@ -412,7 +412,7 @@ fn a_codex_launch_returns_the_thread_its_daemon_made_and_leaves_no_client_behind
     let id = stdout(&out);
     assert_eq!(
         f.codex_threads(),
-        [id.clone()],
+        std::slice::from_ref(&id),
         "the thread the daemon made"
     );
     assert!(
