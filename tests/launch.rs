@@ -122,6 +122,7 @@ impl Fixture {
             .args(args)
             .env("HOME", self.path())
             .env("FAKE_LAUNCH", mode)
+            .env("CONES_TEST_FAST", "1")
             .env("CLAUDE_CONFIG_DIR", self.path().join("claude"))
             .env("PI_CODING_AGENT_DIR", self.path().join("pi"))
             .env("CODEX_HOME", self.codex_home())
@@ -410,6 +411,76 @@ fn a_terminal_harness_keeps_running_after_its_launcher_exits() {
     // The host's own stop path ends the native process, which is what cleanup relies on.
     unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     wait_until("the fixture client to exit", || !alive(pid));
+}
+
+/// A hosted client that leaves during the launch is not a worker. The launch has to say so
+/// with what the client showed, since the host and its scrollback go with the client.
+fn assert_no_worker(f: &Fixture, out: &Output, shown: &[&str]) {
+    assert!(!out.status.success(), "{}", stdout(out));
+    assert!(stdout(out).is_empty(), "no id may be printed");
+    let error = stderr(out);
+    for text in shown {
+        assert!(error.contains(text), "missing {text:?}: {error}");
+    }
+    assert!(
+        !error.contains("running detached"),
+        "nothing is running: {error}"
+    );
+    wait_until("the host to retire", || f.hosted_pids().is_empty());
+    let rows = f.rows();
+    assert!(rows.is_empty(), "nothing may be listed: {rows:?}");
+    let records = f.recovery();
+    assert_eq!(records[1]["event"], "launch.unnamed");
+    assert!(records[1]["data"]["session_id"].is_null());
+    let recorded = records[1]["data"]["error"].as_str().unwrap();
+    assert!(recorded.contains(shown[0]), "{recorded}");
+}
+
+#[test]
+fn a_hosted_client_that_exits_on_its_sign_in_screen_fails_the_launch_with_that_screen() {
+    let f = Fixture::new();
+    let out = f.launch("login", "pi", "work nobody will do");
+    assert_no_worker(
+        &f,
+        &out,
+        &[
+            "pi exited 1",
+            "No API key found. Starting login flow...",
+            "Would you like to log in to the fixture? [(y)es, (n)o]:",
+        ],
+    );
+}
+
+#[test]
+fn a_hosted_client_that_refuses_to_start_fails_the_launch_with_its_diagnostic() {
+    let f = Fixture::new();
+    let out = f.launch("fail", "pi", "this will not start");
+    assert_no_worker(&f, &out, &["pi exited 3", "fixture refused this launch"]);
+}
+
+#[test]
+fn a_hosted_client_waiting_on_a_screen_is_named_with_what_it_shows() {
+    let f = Fixture::new();
+    let out = f.launch("stuck", "pi", "work it has not taken");
+    // It is alive, so it is named: cones cannot tell a sign-in question from a working client.
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = stdout(&out);
+    let hosted = f.hosted_pids();
+    assert_eq!(hosted.len(), 1, "{hosted:?}");
+    assert!(alive(hosted[0]));
+    assert!(
+        f.rows()
+            .iter()
+            .any(|r| r["session"]["session_id"] == id.as_str()),
+        "cones ls does not carry {id}"
+    );
+    // What it can say is that the harness reported nothing, and what the client shows.
+    let said = stderr(&out);
+    assert!(
+        said.contains("pi has reported no conversation")
+            && said.contains("Would you like to log in to the fixture? [(y)es, (n)o]:"),
+        "{said}"
+    );
 }
 
 #[test]

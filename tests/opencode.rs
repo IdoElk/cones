@@ -317,6 +317,18 @@ fn live_rows_require_native_identity_and_do_not_guess_state_from_finished_messag
     assert_eq!(rows[0].title.as_deref(), Some("Named OpenCode"));
     assert_eq!(rows[0].context_tokens, Some(36));
     assert!(rows.iter().all(|row| row.own_terminal()));
+    // The refusal names what can be done instead, which differs by what the harness keeps.
+    let refused = cones::harness::join(&rows[0], dir.path(), false).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "opencode runs in its own terminal and cannot be joined from here · read it with \
+         `cones show`, resume it from history once it ends"
+    );
+    assert_eq!(
+        cones::harness::own_terminal("amp"),
+        "amp runs in its own terminal and cannot be joined from here · it keeps no \
+         conversation cones can read, so use that terminal"
+    );
     for row in &rows[1..] {
         assert!(row.session_id.starts_with("opencode-"));
         assert_eq!(row.model, None);
