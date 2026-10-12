@@ -178,7 +178,7 @@ pub struct Screen {
 /// What a live row's id names once history has no conversation under it.
 pub enum Live {
     Conversation(Located),
-    Screen(Screen),
+    Screen(Box<Screen>),
 }
 
 /// Resolve an id `cones ls` or `cones launch` printed for a live row. A `client_pid` harness
@@ -220,11 +220,11 @@ pub fn live(
     let (Some(record), Some(listed)) = (hosts.first(), listed) else {
         return Ok(None);
     };
-    Ok(Some(Live::Screen(Screen {
+    Ok(Some(Live::Screen(Box::new(Screen {
         text: terminal_host::text(record)
             .with_context(|| format!("reading the cones terminal for {id}"))?,
         session: session.unwrap_or(listed),
-    })))
+    }))))
 }
 
 impl Screen {
