@@ -171,9 +171,12 @@ arrival/change/expiry. Terminal-only adapters expose no accounting until a reade
 
 ## Terminal-only definitions and forks
 
-Terminal-only definitions set `transcript.available: false` with empty roots and message
-sources. Their identity is a process, without native history or accounting. `home.env` may be
-empty when no native override is verified; never invent one.
+Terminal-only definitions are listed by their process, without state or accounting.
+`home.env` may be empty when no native override is verified; never invent one. Most set
+`transcript.available: false` with empty roots and message sources. One whose saved
+conversations are verified declares roots and message sources instead, as Copilot and Cursor
+Agent do, and `agents::meta` reads each file's id, folder and start; that adds history, search
+and `cones show`, and nothing live beyond a reported `native_id`.
 
 `discovery.aliases` must resolve to the canonical executable. `entrypoints` matches immediate
 Node/Bun script operands by relative suffix, excluding names in prompt arguments.

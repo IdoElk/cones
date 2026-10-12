@@ -439,10 +439,23 @@ require an execution adapter. See [integration requirements](harness-definitions
 ## Additional terminal harnesses
 
 These adapters offer launch, process discovery, Ctrl+Z return, viewer reuse and stop. They
-have no native transcript/history, external-terminal join, exact conversation identity,
-message delivery or supervised execution. State, model, context, tokens, cost and last reply
-remain absent. Model selection only supplies a launch flag. No hooks or native configuration
-rewrites are installed.
+have no external-terminal join, message delivery or supervised execution. State, model,
+context, tokens, cost and last reply remain absent. Model selection only supplies a launch
+flag. No hooks or native configuration rewrites are installed. A session cones hosts can be
+read as its terminal screen with [`cones show`](cli.md#reading-a-conversation); one in a
+terminal cones does not own, with no saved conversation, has nothing cones can read.
+
+Copilot and Cursor Agent conversations are history and show only: listed in history and
+search and printed by `cones show`, with no state, usage, resume or fork. Both readers were
+verified from files the installed CLIs had already written, with no model turn. Copilot is
+read from `session-state/ID/events.jsonl`; a live row names its conversation as `native_id`
+from the `inuse.PID.lock` the client holds, ignoring a lock older than the process. Cursor
+is read from `projects/*/agent-transcripts/ID/ID.jsonl`, which stamps no message, and takes
+its folder and start from `chats/*/ID/meta.json`; a transcript without that record is not
+listed, and a live Cursor row names no conversation. Gemini, Droid, Amp and Kimi
+conversations are unsupported: Gemini's chat file is a log of `$set` updates and re-emitted
+message ids whose replay is unverified, no Droid file here holds an assistant reply, Amp
+keeps threads on its server and Kimi wrote no home.
 
 | Harness | Interactive instruction | Model flag | Checked CLI |
 | --- | --- | --- | --- |
@@ -454,7 +467,8 @@ rewrites are installed.
 | Kimi | None; an instruction is refused | `--model` | 2.1.1 |
 
 Native boot, process identity, return/reuse and stop were checked with disposable homes.
-Model-backed turns, permission questions and conversation reporting remain unverified.
+Model-backed turns, permission questions, live conversation reporting and opening a Copilot
+or Cursor history row in the dashboard remain unverified.
 These are not full harness integrations. Kimi's `--prompt` answers and exits, and 2.1.1
 refuses it beside `--auto`, so Kimi starts only without an instruction. Kimi replaces its process title with `Kimi Code`,
 so management commands using that title cannot be distinguished. Tab/Left remain native;

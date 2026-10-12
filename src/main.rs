@@ -869,7 +869,32 @@ fn execute(cli: Cli) -> Result<i32> {
             cones::history_api::validate_harness(harness.as_deref())?;
             let home = home.map(|p| cones::expand_path(&p, &cwd)).transpose()?;
             let located =
-                cones::show::locate_scoped(&claude, &id, harness.as_deref(), home.as_deref())?;
+                match cones::show::locate_scoped(&claude, &id, harness.as_deref(), home.as_deref())
+                {
+                    Ok(located) => located,
+                    // Not a conversation's own id: a live row is listed by another one.
+                    Err(missing) => {
+                        ensure!(tail != Some(0), "--tail takes a positive number of lines");
+                        match cones::show::live(
+                            &state,
+                            &claude,
+                            &id,
+                            harness.as_deref(),
+                            home.as_deref(),
+                        )? {
+                            Some(cones::show::Live::Conversation(located)) => located,
+                            Some(cones::show::Live::Screen(screen)) => {
+                                if json {
+                                    println!("{}", screen.json(tail, all));
+                                } else {
+                                    print!("{}", screen.render(tail, all));
+                                }
+                                return Ok(0);
+                            }
+                            None => return Err(missing),
+                        }
+                    }
+                };
             let tail = (!all).then(|| tail.unwrap_or(cones::show::DEFAULT_TAIL));
             let export = cones::transcript::export(&located.source, &located.key.harness, tail)?;
             if json {

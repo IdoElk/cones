@@ -9,11 +9,21 @@ discovery:
   aliases: [agent]
   exclude_subcommands: ["--help", "-h", "--version", "login", "logout", "status", "update", "install-shell-integration", "mcp", "create-chat"]
 transcript:
-  available: false
-  roots: []
+  roots:
+    - {path: projects, depth: 3, archived: false}
   messages:
-    user: {sources: []}
-    assistant: {sources: []}
+    user:
+      sources:
+        - when: {/role: user}
+          path: /message/content
+          shape: blocks
+          types: [text]
+    assistant:
+      sources:
+        - when: {/role: assistant}
+          path: /message/content
+          shape: blocks
+          types: [text]
 operations:
   launch:
     identity: client_pid

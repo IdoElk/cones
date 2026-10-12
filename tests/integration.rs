@@ -23,6 +23,7 @@ mod launch;
 mod notes;
 mod opencode;
 mod runner;
+mod show_screen;
 mod stop;
 mod terminals;
 mod transcript;
