@@ -292,7 +292,7 @@ fn thread(
     let name = kind.to_string();
     let typed = crate::fleet::headline(prompt);
     let pid = record.session.pid;
-    let found = settle(SETTLE, claude, state, policy, |s| {
+    let fits = |s: &Session| {
         s.harness == name
             && s.kind == record.session.kind
             && s.cwd == dir
@@ -302,7 +302,14 @@ fn thread(
                 .as_deref()
                 .and_then(crate::codex::prompt_of)
                 == typed
-    })?;
+    };
+    let mut found = settle(SETTLE, claude, state, policy, fits)?;
+    if found.len() == 1 {
+        // ponytail: one more look, so a second thread made a moment after the first is seen
+        // before one is named. A thread made later than that is still named wrongly.
+        std::thread::sleep(POLL);
+        found = settle(Duration::ZERO, claude, state, policy, fits)?;
+    }
     ensure!(
         found.len() < 2,
         "{kind} reported {} new threads in {} with this prompt; cones will not choose between \

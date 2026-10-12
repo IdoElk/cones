@@ -91,8 +91,10 @@ if name == "codex":
     # on the first turn and tells the launcher nothing, so the rollout is all cones can read.
     cwd = args[args.index("-C") + 1]
     prompt = args[args.index("--") + 1] if "--" in args else None
+    made = []
     for _ in range(2 if mode == "twice" else 1 if prompt else 0):
         thread = str(uuid.uuid4())
+        made.append(thread)
         now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".%03dZ" % (time.time() % 1 * 1000)
         lines = [
             {"timestamp": now, "ordinal": 0, "type": "session_meta", "payload": {
@@ -112,9 +114,11 @@ if name == "codex":
         partial = rollout.with_suffix(".tmp")
         partial.write_text("".join(json.dumps(line) + "\n" for line in lines))
         partial.rename(rollout)
-        (locks / f"{thread}.lock").touch()
         with open(home / "fixture-threads", "a") as reported:
             reported.write(thread + "\n")
+    # A thread is a row once the daemon holds its lock, so both become rows together.
+    for thread in made:
+        (locks / f"{thread}.lock").touch()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     while True:
         time.sleep(0.05)
