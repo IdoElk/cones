@@ -260,7 +260,11 @@ struct Client(std::process::Child);
 impl Client {
     fn start(f: &Fixture, name: &str) -> Self {
         let program = f.root.path().join(".local/bin").join(name);
-        fs::write(&program, "#!/usr/bin/python3\nimport time\ntime.sleep(3600)\n").unwrap();
+        fs::write(
+            &program,
+            "#!/usr/bin/python3\nimport time\ntime.sleep(3600)\n",
+        )
+        .unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
         Self(
             Command::new(&program)
@@ -400,7 +404,9 @@ fn a_copilot_process_reads_the_conversation_its_lock_names() {
             ],
         );
         fs::write(
-            sessions.join(id).join(format!("inuse.{}.lock", client.0.id())),
+            sessions
+                .join(id)
+                .join(format!("inuse.{}.lock", client.0.id())),
             "",
         )
         .unwrap();
@@ -408,7 +414,11 @@ fn a_copilot_process_reads_the_conversation_its_lock_names() {
     // A lock written before this process began belongs to whoever had the pid before it.
     fs::File::options()
         .write(true)
-        .open(sessions.join(stale).join(format!("inuse.{}.lock", client.0.id())))
+        .open(
+            sessions
+                .join(stale)
+                .join(format!("inuse.{}.lock", client.0.id())),
+        )
         .unwrap()
         .set_modified(std::time::SystemTime::now() - Duration::from_secs(86400))
         .unwrap();
@@ -446,7 +456,9 @@ fn a_cursor_conversation_is_read_by_its_file_id_and_takes_its_folder_from_the_ch
     );
     for id in [cli, editor] {
         jsonl(
-            &cursor.join(format!("projects/tmp-work/agent-transcripts/{id}/{id}.jsonl")),
+            &cursor.join(format!(
+                "projects/tmp-work/agent-transcripts/{id}/{id}.jsonl"
+            )),
             &[
                 json!({"role": "user", "message": {"content": [
                     {"type": "text", "text": "<user_query>\nmake the file\n</user_query>"}]}}),
@@ -495,10 +507,14 @@ fn a_cursor_conversation_is_read_by_its_file_id_and_takes_its_folder_from_the_ch
     assert_eq!(report["session"]["session_id"], cli);
     assert_eq!(report["cwd"], json!(f.work));
     assert_eq!(report["messages"].as_array().unwrap().len(), 3);
-    assert!(report["messages"][0]["at"].is_null(), "Cursor stamps no message");
+    assert!(
+        report["messages"][0]["at"].is_null(),
+        "Cursor stamps no message"
+    );
     let missing = f.cones(&["show", editor]);
     assert!(
-        !missing.status.success() && String::from_utf8_lossy(&missing.stderr).contains("no session"),
+        !missing.status.success()
+            && String::from_utf8_lossy(&missing.stderr).contains("no session"),
         "a transcript with no chat record is not a CLI conversation"
     );
 }

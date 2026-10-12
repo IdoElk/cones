@@ -87,7 +87,11 @@ fn copilot_sessions(home: &Path) -> Vec<(u32, String, DateTime<Utc>)> {
                         .strip_suffix(".lock")?
                         .parse()
                         .ok()?;
-                    Some((pid, id.clone(), file.metadata().ok()?.modified().ok()?.into()))
+                    Some((
+                        pid,
+                        id.clone(),
+                        file.metadata().ok()?.modified().ok()?.into(),
+                    ))
                 })
         })
         .collect()
@@ -129,7 +133,10 @@ pub fn sessions(kind: HarnessKind, home: &Path) -> Result<Vec<Session>> {
             // The lock names the packaged binary, which is the loader's child when there is one.
             for (pid, id, locked) in copilot_sessions(home) {
                 let pid = clients.get(&pid).copied().unwrap_or(pid);
-                if processes.iter().any(|p| p.pid == pid && p.started <= locked) {
+                if processes
+                    .iter()
+                    .any(|p| p.pid == pid && p.started <= locked)
+                {
                     reported.insert(pid, id);
                 }
             }

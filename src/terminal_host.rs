@@ -66,15 +66,22 @@ struct Launch {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Request {
-    Attach { version: u32, id: String },
+    Attach {
+        version: u32,
+        id: String,
+    },
     Input(Vec<u8>),
     Resize(u16, u16),
     Scroll(i32),
     Update(Box<Session>),
-    Stop { id: String },
+    Stop {
+        id: String,
+    },
     /// Read the screen without attaching: it works beside an attached dashboard and changes
     /// nothing the client or that dashboard can observe.
-    Text { id: String },
+    Text {
+        id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
