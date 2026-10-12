@@ -202,7 +202,7 @@ cones launch --dir ~/src/app --harness claude --model opus --effort high
 
 `--model` and `--effort` override defaults for this session only; unsupported flags fail.
 Other unset settings use [configured defaults](jobs.md#composer-harnesses). Omitting the prompt
-opens the session waiting for input. `--print-command` prints folder, environment and command
+opens the session waiting for input, except for Codex, which needs one. `--print-command` prints folder, environment and command
 without launching or recording anything.
 
 Claude and Codex launch into their daemons; OpenCode, pi and experimental launchers use
@@ -211,7 +211,8 @@ survives the launching shell, so no terminal is needed. See [detached identities
 verification limits](harness.md#detached-launch) before using the returned id with other commands.
 
 An unnamed launch exits nonzero without printing an id or stopping the started session.
-Concurrent identical prompts receive separate owned identities. The [launch ledger](#diagnostics)
+Concurrent identical prompts receive separate owned identities, except for Codex, where they
+are refused. The [launch ledger](#diagnostics)
 retains submissions and identification outcomes, including with debug off.
 
 ### One-off tasks
@@ -232,15 +233,16 @@ overlap admission.
 cones stop 5bf8392e-17cb-405d-a400-22dfbda13472
 ```
 
-Use the id from `cones ls --json`. Two targets are supported:
+Use the id from `cones ls --json`. Three targets are supported:
 
 | Target | Operation |
 | --- | --- |
 | Claude background | Native `claude stop <short id>` in its recorded home. Repeated stop succeeds; job record and transcript remain. |
+| Codex daemon thread | The daemon interrupts its running turn and closes its background terminals, with or without a client attached. A quiet thread succeeds with nothing to stop. |
 | Owned persistent terminal | Host stop, acknowledged after the client exits. Saved host ids and current discovered ids resolve by harness and live client PID. |
 
 Ambiguous or unknown ids, unrelated external terminals and unsupported harness operations fail.
-Codex has no supported per-thread stop; stopping its daemon would affect every thread.
+See [detached launch](harness.md#detached-launch) for what a Codex stop leaves in place.
 The dashboard has separate [stop/removal controls](harness.md#native-actions).
 
 ## Coordinator

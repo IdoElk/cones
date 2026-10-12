@@ -38,17 +38,22 @@ pub(super) fn apply(home: &Path, rows: &mut [Session]) {
     }
 }
 
-fn read(home: &Path, ids: &[&str]) -> io::Result<HashMap<String, &'static str>> {
-    let deadline = Instant::now() + DEADLINE;
+/// A websocket on the daemon's control socket, with nothing sent yet. It starts no daemon.
+pub(super) fn connect(home: &Path, timeout: Duration) -> io::Result<WebSocket<UnixStream>> {
     let stream = UnixStream::connect(home.join("app-server-control/app-server-control.sock"))?;
-    stream.set_read_timeout(Some(DEADLINE))?;
-    stream.set_write_timeout(Some(DEADLINE))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_MESSAGE))
         .max_frame_size(Some(MAX_MESSAGE));
-    let (mut socket, _) =
-        tungstenite::client::client_with_config("ws://localhost/", stream, Some(config))
-            .map_err(io::Error::other)?;
+    tungstenite::client::client_with_config("ws://localhost/", stream, Some(config))
+        .map(|(socket, _)| socket)
+        .map_err(io::Error::other)
+}
+
+fn read(home: &Path, ids: &[&str]) -> io::Result<HashMap<String, &'static str>> {
+    let deadline = Instant::now() + DEADLINE;
+    let mut socket = connect(home, DEADLINE)?;
     send(
         &mut socket,
         &json!({"id": 0, "method": "initialize", "params": {"clientInfo": {"name": "cones_status", "version": env!("CARGO_PKG_VERSION")}}}),
@@ -76,7 +81,7 @@ fn read(home: &Path, ids: &[&str]) -> io::Result<HashMap<String, &'static str>> 
     Ok(states)
 }
 
-fn remaining(socket: &WebSocket<UnixStream>, deadline: Instant) -> io::Result<()> {
+pub(super) fn remaining(socket: &WebSocket<UnixStream>, deadline: Instant) -> io::Result<()> {
     let left = deadline
         .checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
@@ -85,7 +90,7 @@ fn remaining(socket: &WebSocket<UnixStream>, deadline: Instant) -> io::Result<()
     socket.get_ref().set_write_timeout(Some(left))
 }
 
-fn send(socket: &mut WebSocket<UnixStream>, value: &Value) -> io::Result<()> {
+pub(super) fn send(socket: &mut WebSocket<UnixStream>, value: &Value) -> io::Result<()> {
     socket
         .send(Message::Text(value.to_string().into()))
         .map_err(io::Error::other)

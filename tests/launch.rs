@@ -461,6 +461,83 @@ fn two_codex_threads_for_one_prompt_are_refused_rather_than_chosen_between() {
     assert!(recovery[1]["data"]["session_id"].is_null());
 }
 
+/// Codex reports nothing that ties a thread to the launch that asked for it, so two launches
+/// of one prompt into one folder could each be handed the other's thread. The ledger every
+/// launch writes first is what shows the overlap, and an overlap is refused.
+#[test]
+fn a_codex_launch_overlapping_another_of_the_same_prompt_is_refused_and_a_later_one_is_named() {
+    let f = Fixture::codex();
+    let ledger = f.state().join("launches.jsonl");
+    let line = |event: &str| {
+        serde_json::json!({
+            "v": 1, "timestamp": chrono::Utc::now().to_rfc3339(), "pid": 1,
+            "dashboard_id": null, "event": event, "level": "recovery",
+            "data": {
+                "operation_id": "codex:start:rival", "harness": "codex",
+                "cwd": f.work, "prompt": "same words\nwith its own second line",
+            },
+        })
+        .to_string()
+            + "\n"
+    };
+    fs::write(&ledger, line("launch.submitted")).unwrap();
+
+    let out = f.launch("ok", "codex", "same words");
+    assert!(!out.status.success());
+    assert_eq!(stdout(&out), "", "an id was guessed");
+    assert!(stderr(&out).contains("will not choose"), "{}", stderr(&out));
+    let refused = f.codex_threads();
+    assert_eq!(refused.len(), 1, "the refused launch still made its thread");
+    let hosted = f.hosted_pids();
+    assert_eq!(hosted.len(), 1, "{hosted:?}");
+    assert!(alive(hosted[0]), "an unnamed launch must be left running");
+    assert_eq!(f.recovery().last().unwrap()["event"], "launch.unnamed");
+
+    // Another prompt was never in question, whatever else is waiting.
+    let out = f.launch("ok", "codex", "other words");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(f.codex_threads()[1], stdout(&out));
+
+    // Once the rival is settled, the same prompt is named again, and by its own thread: the
+    // refused launch's thread is older than this launch and is not a candidate.
+    let mut settled = fs::read_to_string(&ledger).unwrap();
+    settled.push_str(&line("launch.unnamed"));
+    fs::write(&ledger, settled).unwrap();
+    let out = f.launch("ok", "codex", "same words");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let threads = f.codex_threads();
+    assert_eq!(threads.len(), 3);
+    assert_eq!(threads[2], stdout(&out));
+    assert_ne!(threads[2], refused[0]);
+    assert_eq!(
+        f.recovery().last().unwrap()["data"]["session_id"],
+        threads[2].as_str()
+    );
+}
+
+/// Codex keeps nothing for a client that has not taken a turn, so the only id such a launch
+/// could return is one that stops resolving at the first turn.
+#[test]
+fn a_codex_launch_with_no_prompt_is_refused_before_anything_is_started() {
+    let f = Fixture::codex();
+    let out = f.cones(
+        "ok",
+        &[
+            "launch",
+            "--dir",
+            f.work.to_str().unwrap(),
+            "--harness",
+            "codex",
+        ],
+    );
+    assert!(!out.status.success());
+    assert_eq!(stdout(&out), "", "an id was returned");
+    assert!(stderr(&out).contains("needs a prompt"), "{}", stderr(&out));
+    assert_eq!(f.hosted_pids(), [] as [u32; 0], "a client was started");
+    assert_eq!(f.codex_threads(), [] as [String; 0]);
+    assert!(f.recovery().is_empty(), "{:?}", f.recovery());
+}
+
 #[test]
 fn a_launch_with_no_prompt_detaches_and_is_named_like_any_other() {
     // A worker started with nothing to do is waiting for input, not a failed launch: it is

@@ -1,10 +1,12 @@
 //! `cones stop ID`: end one session's work and keep its conversation.
 //!
-//! Stopping is not deleting and not hiding. Two mechanisms are supported, and a target served by
-//! neither is refused rather than approximated:
+//! Stopping is not deleting and not hiding. Three mechanisms are supported, and a target served
+//! by none is refused rather than approximated:
 //!
 //! * a harness that declares a native `stop` operation — Claude's background sessions, whose
 //!   record and transcript survive it, so `claude attach` and `claude --resume` still open them;
+//! * a Codex daemon thread, whose running turn and background terminals the daemon ends over
+//!   its own protocol, with or without a client attached;
 //! * a cones-owned persistent terminal, whose host confirms the native client it owns has exited.
 //!
 //! Signalling a daemon, removing a job record or closing an attach client would each report
@@ -19,6 +21,36 @@ use std::{
 /// End the work `id` names. Returns the line describing what was stopped; every other outcome,
 /// including an unsupported target, is an error.
 pub fn session(state: &Path, claude: &Path, id: &str) -> Result<String> {
+    // A Codex thread runs in its daemon, so closing a client that shows it would end nothing.
+    // Its id is settled here, before any terminal that might be showing it is considered.
+    if let Some(thread) = crate::codex::thread(claude, state, id) {
+        let home = harness::home_of(&thread, claude);
+        let stopped = crate::codex::control::stop(&home, id).with_context(|| {
+            format!(
+                "stopping codex thread {id} through the daemon in {}",
+                home.display()
+            )
+        })?;
+        return Ok(match (stopped.turn, stopped.terminals) {
+            (false, false) => format!(
+                "codex thread {id} in {} is running no turn and no background terminal; \
+                 nothing was stopped and its conversation is kept\n",
+                home.display()
+            ),
+            (turn, terminals) => format!(
+                "stopped codex thread {id} in {}: {}; its conversation is kept\n",
+                home.display(),
+                [
+                    turn.then_some("interrupted its running turn"),
+                    terminals.then_some("closed its background terminals"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" and ")
+            ),
+        });
+    }
     let records = crate::terminal_host::records(state);
     // Exact host ids also work for shells and clients with no native discovery.
     // Otherwise resolve the current row before matching its harness and owned pid.
