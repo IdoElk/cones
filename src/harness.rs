@@ -718,7 +718,12 @@ pub fn home_of(session: &crate::fleet::Session, claude: &Path) -> PathBuf {
 /// A harness with no `message` operation cannot be written to from here and says so. Faking it
 /// by typing into the session's terminal would put words in the owner's input line, which is
 /// not a message from a peer and is not cones' to do.
-pub fn message(session: &crate::fleet::Session, home: &Path, text: &str) -> Result<()> {
+pub fn message(
+    session: &crate::fleet::Session,
+    home: &Path,
+    state: &Path,
+    text: &str,
+) -> Result<()> {
     let spec = by_name(&session.harness).context("unknown session harness")?;
     let operation = spec.operations.message.as_ref().with_context(|| {
         format!(
@@ -729,6 +734,10 @@ pub fn message(session: &crate::fleet::Session, home: &Path, text: &str) -> Resu
     let template = match operation {
         spec::Message::PeerInbox { peer_inbox } => {
             return peer_inbox_send(session, home, text, &peer_inbox.protocols);
+        }
+        spec::Message::Reporter { .. } => return reporter_send(session, state, text),
+        spec::Message::Unavailable { unavailable } => {
+            bail!("a note cannot reach {}: {unavailable}", spec.name)
         }
         spec::Message::Command(operation) => {
             if let Some(probe) = &operation.probe {
@@ -768,6 +777,62 @@ pub fn message(session: &crate::fleet::Session, home: &Path, text: &str) -> Resu
         session.harness,
         String::from_utf8_lossy(&out.stderr).trim()
     );
+    Ok(())
+}
+
+/// Hand one note to the reporter cones loaded into a pi or OpenCode client it owns, which
+/// submits it through the harness's own extension API as a user message, queued behind a
+/// running turn. The note goes to the conversation the client shows, since a `client_pid` row
+/// is its process. The reporter answers every note, so a client that never loaded it, or that
+/// shows no conversation, is an error here and not a note left lying in a directory.
+fn reporter_send(session: &crate::fleet::Session, state: &Path, text: &str) -> Result<()> {
+    use std::time::{Duration, Instant};
+    let (name, id) = (&session.harness, &session.session_id);
+    let records = crate::terminal_host::records(state);
+    let record = records
+        .iter()
+        .find(|r| r.matches_session(id, Some(session)))
+        .with_context(|| {
+            format!(
+                "{name} session {id} runs in a terminal cones does not own, so it has no cones \
+                 reporter to take a note"
+            )
+        })?;
+    let inbox = record
+        .notes
+        .as_ref()
+        .filter(|p| p.is_dir())
+        .with_context(|| {
+            format!("the cones terminal running {id} was started without a note inbox; restart it")
+        })?;
+    let note = inbox.join(format!("{}.json", uuid::Uuid::new_v4()));
+    let (pending, reply) = (note.with_extension("tmp"), note.with_extension("done"));
+    std::fs::write(&pending, serde_json::json!({"text": text}).to_string())?;
+    std::fs::rename(&pending, &note)?;
+    // The reporter looks four times a second.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let answer: Value = loop {
+        if let Ok(bytes) = std::fs::read(&reply) {
+            let _ = std::fs::remove_file(&reply);
+            break serde_json::from_slice(&bytes)?;
+        }
+        if Instant::now() >= deadline {
+            // Withdrawn, so a reporter that wakes later cannot deliver a note reported as lost.
+            let withdrawn = std::fs::remove_file(&note).is_ok();
+            bail!(
+                "the cones reporter in {name} session {id} {}",
+                if withdrawn {
+                    "is not answering, so the note was withdrawn"
+                } else {
+                    "took the note and did not confirm it"
+                }
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if let Some(error) = answer["error"].as_str() {
+        bail!("{name} refused the note: {error}");
+    }
     Ok(())
 }
 

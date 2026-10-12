@@ -79,6 +79,8 @@ operations:
       description: "opencode: native session forks"
   resume:
     args: [--session, "{id}"]
+  message:
+    reporter: session.prompt_async
 execution:
   enforcement: unsupported
 viewer:

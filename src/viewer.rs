@@ -422,6 +422,16 @@ impl Viewer {
             .or_else(|| self.pi.as_ref()?.read(self.pid()).map(NativeReport::Pi))
     }
 
+    /// The note inbox of the reporter this viewer loaded into its own client.
+    pub(crate) fn notes(&self) -> Option<std::path::PathBuf> {
+        let report = match (&self.opencode, &self.pi) {
+            (Some(reporter), _) => &reporter.report,
+            (_, Some(reporter)) => &reporter.report,
+            _ => return None,
+        };
+        Some(report.with_file_name("notes"))
+    }
+
     fn kill(&mut self) {
         if !self.reaped
             && let Some(child) = &mut self.child

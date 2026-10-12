@@ -1,7 +1,9 @@
-import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 // Loaded only by a cones-owned viewer. Read OpenCode's native TUI state without
-// registering tools, changing permissions, or handling the user's input.
+// registering tools, changing permissions, or handling the user's input. Notes cones
+// leaves beside the report are submitted through OpenCode's own prompt endpoint.
 export default {
   id: "cones-session-report",
   async tui(api, options) {
@@ -66,7 +68,39 @@ export default {
         invalidate();
       }
     };
-    const timer = setInterval(publish, 250);
+    // Each `<name>.json` is {text} and is answered by `<name>.done`, so the sender
+    // learns whether OpenCode took the note. A note that cannot be removed was withdrawn by
+    // its sender, or taken by an earlier pass still awaiting OpenCode, and is not delivered.
+    const notes = join(dirname(options.path), "notes");
+    const deliver = async () => {
+      let names;
+      try { names = readdirSync(notes); } catch { return; }
+      for (const name of names) {
+        if (!name.endsWith(".json")) continue;
+        const file = join(notes, name), done = `${file.slice(0, -5)}.done`;
+        let text, answer = {};
+        try { text = readFileSync(file, "utf8"); rmSync(file); } catch { continue; }
+        try {
+          const note = JSON.parse(text);
+          const route = api.route.current;
+          const id = route.name === "session" ? route.params?.sessionID : undefined;
+          if (!id) {
+            answer = { error: "this OpenCode shows no session" };
+          } else {
+            // The native prompt endpoint: OpenCode queues it behind a running turn.
+            const result = await api.client.session.promptAsync({
+              sessionID: id, parts: [{ type: "text", text: note.text }],
+            });
+            if (result?.error) answer = { error: JSON.stringify(result.error) };
+          }
+        } catch (error) { answer = { error: String(error?.message ?? error) }; }
+        try {
+          writeFileSync(`${done}.tmp`, JSON.stringify(answer), { mode: 0o600 });
+          renameSync(`${done}.tmp`, done);
+        } catch {}
+      }
+    };
+    const timer = setInterval(() => { deliver(); publish(); }, 250);
     api.lifecycle.onDispose(() => {
       clearInterval(timer);
       invalidate();

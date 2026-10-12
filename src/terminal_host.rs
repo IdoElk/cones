@@ -30,6 +30,9 @@ pub(crate) struct Record {
     pub socket: PathBuf,
     pub session: Session,
     pub what: String,
+    /// Where the reporter loaded into this client takes notes; absent without one.
+    #[serde(default)]
+    pub notes: Option<PathBuf>,
 }
 
 impl Record {
@@ -245,6 +248,7 @@ pub(crate) fn launch(
         id,
         session,
         what: what.into(),
+        notes: None,
     };
     let launch = Launch {
         program: command.get_program().as_bytes().to_vec(),
@@ -435,6 +439,7 @@ pub fn serve() -> io::Result<i32> {
         };
         let viewer = spawn(command, launch.rows, launch.cols, None, launch.colors)?;
         record.session.pid = Some(viewer.pid());
+        record.notes = viewer.notes();
         save(&state, &record)?;
         Ok::<_, io::Error>((lock, listener, viewer, startup))
     })();

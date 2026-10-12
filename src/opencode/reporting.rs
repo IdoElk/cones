@@ -15,7 +15,8 @@ pub(crate) const ENABLE: &str = "CONES_OPENCODE_VIEWER";
 pub(crate) struct Reporter {
     _directory: tempfile::TempDir,
     _config: tempfile::NamedTempFile,
-    report: PathBuf,
+    /// The reporter takes notes from the `notes` directory beside this file.
+    pub(crate) report: PathBuf,
 }
 
 impl Reporter {
@@ -36,6 +37,7 @@ impl Reporter {
             include_str!("../../assets/harnesses/opencode-report.mjs"),
         )?;
         let report = directory.path().join("session.json");
+        fs::create_dir(directory.path().join("notes"))?;
         let original = command
             .get_envs()
             .find(|(key, _)| *key == "OPENCODE_TUI_CONFIG")

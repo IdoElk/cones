@@ -129,7 +129,8 @@ on every harness.
 ### Message delivery
 
 A definition's `message` operation supplies native delivery: a command with `{id}`, `{text}`
-and optional `{remote}`, or Claude's `peer_inbox`. Codex uses `queue --thread`, verified
+and optional `{remote}`, Claude's `peer_inbox`, or the `reporter` in a pi or OpenCode client.
+Codex uses `queue --thread`, verified
 against 0.154.0, on the daemon owning that home. Claude has no delivery command, so cones
 writes to the cross-session inbox that Claude's own SendMessage uses. The socket comes from
 the session's registry record (`messagingSocketPath`), and the token comes from the key file
@@ -145,8 +146,23 @@ user approves it. Setting `"crossSessionInbound": "accept"` in `~/.claude/settin
 delivers these notes without approval; a note held before the change still needs one approval.
 cones cannot see whether a note was held, and never releases one by typing into the terminal.
 
-Missing operations are refused; cones never approximates delivery by typing into a terminal.
-See [comms](cli.md#comms).
+pi and OpenCode have no delivery command, so the reporter cones loads into a client it
+launched submits the note through the harness's extension API: pi's `sendUserMessage` with
+`deliverAs: "steer"`, and OpenCode's `session.prompt_async` for the session the client shows.
+Both start a turn in an idle client and queue the note behind a running one; with pi 0.85.1
+and OpenCode 1.18.31 each note became one user message in the saved conversation. cones
+leaves the note in the reporter's private directory, named in the terminal host's record, and
+waits five seconds for the reporter's answer. A client in a terminal cones does not own, one
+whose reporter is not running and an OpenCode showing no session are refused, and an
+unanswered note is withdrawn. The answer means the harness accepted the call. A failure after
+that, such as a provider error, appears in the client. Delivery to a client waiting on a
+question or permission dialog is unverified.
+
+A definition with no channel states `unavailable` with the reason, and the refusal quotes it.
+Gemini, Cursor Agent, Copilot, Amp, Droid and Kimi take prompts at launch, in headless runs or
+through servers that serve their own clients. Their `--help` output names nothing that
+addresses a running interactive session; their extension APIs were not examined. cones never
+approximates delivery by typing into a terminal. See [comms](cli.md#comms).
 
 ## Reports
 

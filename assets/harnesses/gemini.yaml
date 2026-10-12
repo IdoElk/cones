@@ -28,6 +28,8 @@ operations:
       contains: [--prompt-interactive]
       error: "gemini does not support the required native command"
       description: "gemini: terminal launch; external sessions remain in their own terminals"
+  message:
+    unavailable: "it takes prompts at launch, headless with -p, or over ACP from the client that started it; nothing addresses a running interactive session"
 execution:
   enforcement: unsupported
   result: unsupported

@@ -20,6 +20,7 @@ mod dashboard_update;
 mod history;
 mod history_api;
 mod launch;
+mod notes;
 mod opencode;
 mod runner;
 mod stop;
