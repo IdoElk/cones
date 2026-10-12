@@ -651,6 +651,34 @@ fn ctrl_x_twice_removes_a_background_session_through_claude_rm() {
     d.quit();
 }
 
+/// A session outlives its folder when an agent starts one in a scratch directory and deletes
+/// it. Claude cannot wake it, so enter names the missing folder instead of a spawn error.
+#[test]
+fn entering_a_session_whose_folder_was_deleted_names_the_missing_folder() {
+    let mut d = Dashboard::new("claude-folder-gone", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    let scratch = real_project(&d).join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+    let _gone = seed(&d, &scratch, 1, "Probe the scratch folder", "idle", None);
+    fs::remove_dir(&scratch).unwrap();
+    d.start();
+    d.wait_text("Probe the scratch folder");
+    d.press("down", DOWN);
+    d.press("enter", b"\r");
+    let screen = d.wait_text("attach failed: session directory no longer exists");
+    d.capture("refused");
+    assert!(
+        selected(&screen).contains("Probe the scratch folder"),
+        "{screen}"
+    );
+    assert!(
+        !calls(&d).iter().any(|c| c[0] == "attach"),
+        "{:?}",
+        calls(&d)
+    );
+    d.quit();
+}
+
 /// Claude's fullscreen renderer hides the terminal cursor and draws its own caret. Left and
 /// Tab still return from its empty composer; with a draft they reach Claude. Claude itself
 /// treats Left on an empty prompt as "background this session", so a missed return forks it.

@@ -1270,6 +1270,12 @@ impl Harness for Claude {
     }
     fn attach(&self, session_id: &str, cwd: &Path) -> Result<std::process::Command> {
         uuid::Uuid::parse_str(session_id)?;
+        // Claude cannot wake a session whose folder is gone, and reports it as an untrusted one.
+        ensure!(
+            cwd.is_dir(),
+            "session directory no longer exists: {}",
+            cwd.display()
+        );
         let definition = spec(HarnessKind::Claude);
         check_operation(definition, &definition.operations.attach, "attach")?;
         let path = executable("claude", &launch_path())
