@@ -1,5 +1,6 @@
 //! Codex fleet discovery from processes, writer locks, the thread database and rollouts.
 //! This module observes native sessions; it does not execute supervised jobs.
+pub mod control;
 mod runtime;
 use crate::{
     cost::{Adapter, Reader, Reading, Response},
@@ -972,6 +973,15 @@ pub fn thread_rows(
     removed: &BTreeSet<String>,
 ) -> Vec<Session> {
     thread_rows_observed(codex, state, live, removed, |_, _| {})
+}
+
+/// The daemon thread `id` names in any Codex home, whether or not a client is showing it.
+/// A thread has no process of its own, so process discovery alone never finds one.
+pub fn thread(claude: &Path, state: &Path, id: &str) -> Option<Session> {
+    homes(claude)
+        .iter()
+        .flat_map(|home| thread_rows(home, state, &[], &BTreeSet::new()))
+        .find(|s| s.session_id == id)
 }
 
 pub(crate) fn thread_rows_observed(

@@ -87,6 +87,7 @@ impl Fixture {
         Command::new(env!("CARGO_BIN_EXE_cones"))
             .env("HOME", self.root.path())
             .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
             .args(["--state-dir", self.state().to_str().unwrap(), "stop", id])
             .output()
             .unwrap()
@@ -272,8 +273,9 @@ fn an_unknown_id_and_a_terminal_cones_does_not_own_are_refused_before_any_native
 }
 
 /// The capability boundary is declared, not improvised: only a harness with a native `stop`
-/// operation can be stopped, and Codex 0.155 has no per-thread stop to declare. Its `archive`
-/// and `delete` are history operations and its daemon stop ends every other thread too.
+/// command can be stopped through its CLI, and Codex has none to declare. Its `archive` and
+/// `delete` are history operations and its daemon stop ends every other thread too; a thread
+/// is stopped over the daemon's protocol instead, which the Codex tests below cover.
 #[test]
 fn only_a_declared_native_stop_operation_makes_a_harness_stoppable() {
     let claude = cones::harness::by_name("claude").unwrap();
@@ -292,6 +294,208 @@ fn only_a_declared_native_stop_operation_makes_a_harness_stoppable() {
             "{name} claims a native session stop; verify it before declaring one"
         );
     }
+}
+
+/// A Codex daemon thread cones launched and saved, with its rollout, in the fixture's own
+/// native home. Returns the rollout.
+fn codex_thread(f: &Fixture, id: &str) -> PathBuf {
+    let day = f.root.path().join(".codex/sessions/2026/10/12");
+    fs::create_dir_all(&day).unwrap();
+    let rollout = day.join(format!("rollout-2026-10-12T10-00-00-{id}.jsonl"));
+    let meta = json!({"timestamp": "2026-10-12T10:00:00.000Z", "type": "session_meta", "payload": {
+        "id": id, "session_id": id, "timestamp": "2026-10-12T10:00:00.000Z",
+        "cwd": f.root.path(), "originator": "codex-tui", "cli_version": "0.162.1", "source": "vscode"}});
+    let started = json!({"timestamp": "2026-10-12T10:00:01.000Z", "type": "event_msg",
+        "payload": {"type": "task_started", "turn_id": "turn-1"}});
+    fs::write(&rollout, format!("{meta}\n{started}\n")).unwrap();
+    fs::write(
+        f.state().join("codex-threads.json"),
+        json!([{"id": id, "cwd": f.root.path(), "started": "2026-10-12T10:00:00Z", "rollout": rollout}])
+            .to_string(),
+    )
+    .unwrap();
+    rollout
+}
+
+type Calls = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+
+/// A stand-in app-server on the fixture's control socket, holding `loaded` with a turn in
+/// progress and one background terminal open. It answers the way Codex 0.162.1 was seen to:
+/// an interrupt is acknowledged before the turn reports interrupted, and a clean before the
+/// terminal list empties. Returns every request it was sent.
+fn codex_daemon(f: &Fixture, loaded: &[&str]) -> Calls {
+    use tungstenite::Message;
+    let dir = f.root.path().join(".codex/app-server-control");
+    fs::create_dir_all(&dir).unwrap();
+    let listener =
+        std::os::unix::net::UnixListener::bind(dir.join("app-server-control.sock")).unwrap();
+    let seen = Calls::default();
+    let (calls, loaded) = (seen.clone(), json!(loaded));
+    std::thread::spawn(move || {
+        // Polls left before each acknowledged request is reported done; None is still running.
+        let (mut turn, mut terminal) = (None::<u8>, None::<u8>);
+        for stream in listener.incoming() {
+            let mut socket = tungstenite::accept(stream.unwrap()).unwrap();
+            while let Ok(Message::Text(text)) = socket.read() {
+                let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+                calls.lock().unwrap().push(request.clone());
+                let result = match request["method"].as_str().unwrap() {
+                    "initialized" => continue,
+                    "initialize" => json!({}),
+                    "thread/read" => {
+                        let status = if turn == Some(0) { "idle" } else { "active" };
+                        json!({"thread": {"id": request["params"]["threadId"],
+                            "status": {"type": status, "activeFlags": []}}})
+                    }
+                    "thread/loaded/list" => json!({"data": loaded}),
+                    "thread/turns/list" => {
+                        let status = if turn == Some(0) {
+                            "interrupted"
+                        } else {
+                            "inProgress"
+                        };
+                        turn = turn.map(|left| left.saturating_sub(1));
+                        json!({"data": [{"id": "turn-1", "status": status}]})
+                    }
+                    "turn/interrupt" => {
+                        turn = Some(1);
+                        json!({})
+                    }
+                    "thread/backgroundTerminals/list" => {
+                        let open = terminal != Some(0);
+                        terminal = terminal.map(|left| left.saturating_sub(1));
+                        let open: &[&str] = if open { &["cargo test"] } else { &[] };
+                        json!({"data": open.iter().map(|c| json!({"processId": "1", "command": c})).collect::<Vec<_>>()})
+                    }
+                    "thread/backgroundTerminals/clean" => {
+                        terminal = Some(1);
+                        json!({})
+                    }
+                    other => panic!("cones sent the daemon {other}"),
+                };
+                let reply = json!({"id": request["id"], "result": result}).to_string();
+                // A notification first: a reply is matched by id, never by arrival order.
+                let notice = json!({"method": "thread/status/changed", "params": {}}).to_string();
+                socket.send(Message::Text(notice.into())).unwrap();
+                socket.send(Message::Text(reply.into())).unwrap();
+            }
+        }
+    });
+    seen
+}
+
+/// What the daemon was asked beyond the handshake and the status read every listing makes.
+fn methods(calls: &Calls) -> Vec<String> {
+    calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call["method"].as_str().unwrap().to_owned())
+        .filter(|method| {
+            !matches!(
+                method.as_str(),
+                "initialize" | "initialized" | "thread/read"
+            )
+        })
+        .collect()
+}
+
+/// A Codex thread runs in its daemon and has no process, so with no client attached nothing
+/// but the daemon can end its work. The turn is interrupted by its own id and the command it
+/// was running is closed; the stop returns only once the daemon reports both gone.
+#[test]
+fn a_codex_thread_with_no_client_has_its_turn_interrupted_and_its_terminals_closed() {
+    let f = Fixture::new();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec0606e";
+    let rollout = codex_thread(&f, id);
+    let calls = codex_daemon(&f, &[id]);
+
+    let out = f.stop(id);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let message = text(&out.stdout);
+    assert!(
+        message.contains(&format!("stopped codex thread {id}"))
+            && message.contains("interrupted its running turn and closed its background terminals")
+            && message.contains("conversation is kept"),
+        "{message}"
+    );
+    assert_eq!(
+        methods(&calls),
+        [
+            "thread/loaded/list",
+            "thread/turns/list",
+            "turn/interrupt",
+            "thread/turns/list",
+            "thread/turns/list",
+            "thread/backgroundTerminals/list",
+            "thread/backgroundTerminals/clean",
+            "thread/backgroundTerminals/list",
+            "thread/backgroundTerminals/list",
+        ],
+        "the stop must wait for the daemon to report the turn and the terminal gone"
+    );
+    let interrupt = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|call| call["method"] == "turn/interrupt")
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        interrupt["params"],
+        json!({"threadId": id, "turnId": "turn-1"})
+    );
+    assert!(rollout.is_file(), "the conversation must survive the stop");
+    assert_eq!(
+        f.calls(),
+        "",
+        "a thread is stopped by its daemon, not a CLI"
+    );
+
+    // The same id again finds nothing running, says so, and interrupts nothing.
+    let sent = methods(&calls).len();
+    let out = f.stop(id);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout).contains("nothing was stopped"),
+        "{}",
+        text(&out.stdout)
+    );
+    assert_eq!(
+        methods(&calls)[sent..],
+        [
+            "thread/loaded/list",
+            "thread/turns/list",
+            "thread/backgroundTerminals/list"
+        ]
+    );
+}
+
+/// A saved thread the daemon has let go runs nothing, and one whose daemon is gone cannot be
+/// asked: the first is a stop with nothing to do, the second an error that names the daemon.
+#[test]
+fn a_codex_thread_its_daemon_does_not_hold_is_not_interrupted() {
+    let f = Fixture::new();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec0606f";
+    codex_thread(&f, id);
+
+    let out = f.stop(id);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains(&format!("stopping codex thread {id} through the daemon")),
+        "{}",
+        text(&out.stderr)
+    );
+
+    let calls = codex_daemon(&f, &[]);
+    let out = f.stop(id);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout).contains("nothing was stopped"),
+        "{}",
+        text(&out.stdout)
+    );
+    assert_eq!(methods(&calls), ["thread/loaded/list"]);
 }
 
 /// The host acknowledges a stop only after the native client it owns has exited, so a successful

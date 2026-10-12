@@ -8,11 +8,12 @@
 //!
 //! Two identical prompts launched into one folder at the same moment are told apart by a key
 //! the launch itself owns: Claude's returned background id, or the pid the host reports for
-//! the native client it just spawned. Codex gives a launch no such key: its daemon makes the
-//! thread and tells the client nothing a second process can read. Its thread is therefore
-//! named the way the dashboard names it, by folder, start time and typed prompt, and only
-//! when exactly one thread fits. A launch cones cannot name is reported as unnamed, never
-//! guessed.
+//! the native client it just spawned. Codex gives a launch no such key: its daemon reports
+//! the new thread to the client that asked for it and to nobody else, and the client records
+//! it nowhere a second process can read. Its thread is therefore named the way the dashboard
+//! names it, by folder, start time and typed prompt, and only when exactly one thread fits
+//! and no other launch was waiting on the same three. A launch cones cannot name is reported
+//! as unnamed, never guessed.
 //!
 //! Permissions, model choice and the conversation stay with the harness. cones adds a
 //! lifetime and a name for it.
@@ -85,6 +86,14 @@ pub fn detached(
     policy: &Policy,
     start: harness::Start,
 ) -> Result<Launched> {
+    let handler = harness::spec(kind).launch.as_ref().map(|l| l.handler);
+    // The daemon makes a thread on the first turn and keeps nothing before it, so a waiting
+    // client has only its pid, which stops naming a row the moment that turn arrives.
+    ensure!(
+        handler != Some(LaunchHandler::CodexRemote) || !prompt.is_empty(),
+        "{kind} makes a thread on its first turn and has no lasting id before it, so a \
+         detached launch needs a prompt; open an empty session from the dashboard"
+    );
     let owned = format!("{kind}:start:{}", uuid::Uuid::new_v4());
     let since = chrono::Utc::now();
     // Written before anything is started. A launcher killed between here and the reply
@@ -98,7 +107,6 @@ pub fn detached(
             "cwd": dir.to_string_lossy(), "prompt": prompt,
         }),
     );
-    let handler = harness::spec(kind).launch.as_ref().map(|l| l.handler);
     let result = match (handler, start) {
         (Some(LaunchHandler::ClaudeBackground), harness::Start::Background(command)) => {
             background(state, claude, policy, kind, dir, command)
@@ -106,16 +114,12 @@ pub fn detached(
         (Some(LaunchHandler::Terminal), harness::Start::Foreground(command)) => {
             hosted(state, claude, policy, kind, dir, prompt, &owned, command)
         }
-        // With no prompt there is no thread to wait for: the daemon makes one on the first
-        // turn, so the waiting client is named like any other hosted one.
-        (Some(LaunchHandler::CodexRemote), harness::Start::Foreground(command))
-            if prompt.is_empty() =>
-        {
-            hosted(state, claude, policy, kind, dir, prompt, &owned, command)
-        }
         (Some(LaunchHandler::CodexRemote), harness::Start::Foreground(command)) => {
-            host(state, kind, dir, prompt, &owned, command)
-                .and_then(|record| thread(state, claude, policy, kind, dir, prompt, since, &record))
+            host(state, kind, dir, prompt, &owned, command).and_then(|record| {
+                thread(
+                    state, claude, policy, kind, dir, prompt, &owned, since, &record,
+                )
+            })
         }
         _ => bail!("{kind} has no detached launch"),
     };
@@ -276,8 +280,9 @@ fn host(
 
 /// Name the thread a hosted Codex client just opened, then let the client go. The client's
 /// pid names nothing that lasts: the roster replaces its row with the daemon's thread as soon
-/// as there is one. The thread is the one in this folder, started after this launch and opened with this prompt,
-/// which is the dashboard's rule; two that fit are refused rather than chosen between.
+/// as there is one. The thread is the one in this folder, started after this launch and
+/// opened with this prompt, which is the dashboard's rule. Two that fit are refused rather
+/// than chosen between, and so is one that fits while another launch waits on the same rule.
 #[allow(clippy::too_many_arguments)]
 fn thread(
     state: &Path,
@@ -286,6 +291,7 @@ fn thread(
     kind: HarnessKind,
     dir: &Path,
     prompt: &str,
+    owned: &str,
     since: chrono::DateTime<chrono::Utc>,
     record: &terminal_host::Record,
 ) -> Result<Launched> {
@@ -329,6 +335,16 @@ fn thread(
             state.join("launches.jsonl").display()
         )
     })?;
+    // Read after the thread is seen: a launch submitted later than this cannot have made it.
+    let rivals = rivals(state, owned, &name, dir, &typed, since);
+    ensure!(
+        rivals == 0,
+        "this prompt was launched into {} {rivals} more time(s) that were still unnamed when \
+         this launch began, and {kind} reports nothing that tells their threads apart; cones \
+         will not choose between them. All are running: `cones ls --dir {}` lists them",
+        dir.display(),
+        dir.display()
+    );
     // The daemon drops its lock minutes after a thread goes quiet. The saved record keeps the
     // thread a row after that, as it does for one the dashboard launched.
     if let (Some(started), Some(rollout)) = (row.started, &row.transcript_path) {
@@ -357,6 +373,57 @@ fn thread(
         harness: name,
         pid: None,
     })
+}
+
+/// Other launches of this prompt into this folder that had not been named or given up on when
+/// this one began, read from the ledger every launch writes before it starts anything. A
+/// launch older than the naming wait has stopped looking for its thread and is not counted.
+fn rivals(
+    state: &Path,
+    owned: &str,
+    harness: &str,
+    dir: &Path,
+    typed: &Option<String>,
+    since: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    let lines: Vec<Value> = std::fs::read_to_string(state.join("launches.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let at = |line: &Value| {
+        chrono::DateTime::parse_from_rfc3339(line["timestamp"].as_str()?)
+            .ok()
+            .map(|at| at.with_timezone(&chrono::Utc))
+    };
+    let settled = |operation: &Value| {
+        lines.iter().any(|line| {
+            matches!(
+                line["event"].as_str(),
+                Some("launch.identified" | "launch.unnamed")
+            ) && line["data"]["operation_id"] == *operation
+                && at(line).is_some_and(|at| at < since)
+        })
+    };
+    lines
+        .iter()
+        .filter(|line| line["event"] == "launch.submitted")
+        .filter(|line| {
+            let data = &line["data"];
+            data["operation_id"] != owned
+                && data["harness"] == harness
+                && data["cwd"].as_str().is_some_and(|cwd| {
+                    Path::new(cwd)
+                        .canonicalize()
+                        .as_deref()
+                        .unwrap_or(Path::new(cwd))
+                        == dir
+                })
+                && data["prompt"].as_str().and_then(crate::fleet::headline) == *typed
+                && at(line).is_some_and(|at| at > since - SETTLE)
+                && !settled(&data["operation_id"])
+        })
+        .count()
 }
 
 /// Poll the roster `cones ls` reads until a row this launch owns appears, or the naming

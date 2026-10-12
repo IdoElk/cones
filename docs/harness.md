@@ -354,26 +354,39 @@ persistent host.
 | --- | --- | --- |
 | Claude | Full native session id resolved from the returned background id. | Native conversation. |
 | Codex, with a prompt | Thread id, once its first turn is reported. | Daemon thread; the launching client is stopped. |
-| Codex, no prompt | `codex-<pid>` until the first turn makes a thread. | Hosted client lifetime. |
+| Codex, no prompt | Refused: Codex keeps no thread before a first turn, so no id would last. | Nothing is started. |
 | OpenCode | `opencode-<pid>`, or the stored host id while discovery reports none. | Hosted client lifetime. |
 | pi | `pi-<pid>`, or the stored host id while discovery reports none. | Hosted client lifetime. |
 | Experimental launchers | Process row, or stored host id when discovery supplies none. | Hosted client lifetime. |
 
 Detached identity uses the owned background id or child PID, never prompt/cwd matching.
-Codex is the exception, because its daemon reports no launch key: its thread is the one new
-thread matching folder, start and prompt, and two that match are refused, so identical
-concurrent prompts in one folder are not told apart. Claude and Codex naming wait up to 20
-seconds; a Codex client stuck on a trust or sign-in screen reports no thread and stays hosted.
+Codex is the exception. Its daemon returns a new thread's id only to the client that asked,
+and the client's own message id is one it invents, so nothing a second process can read ties
+a thread to its launch. The thread is the one new thread matching folder, start and prompt.
+Two that match are refused, and so is one that matches while another launch of that prompt
+into that folder, submitted within the last 20 seconds, is still unnamed in the launch ledger;
+overlapping identical launches therefore all fail unnamed and keep running. The same prompt
+typed into Codex by anything that writes no ledger line is not told apart. Claude and Codex
+naming wait up to 20 seconds; a Codex client stuck on a trust or sign-in screen reports no
+thread and stays hosted.
 Hosted launches wait up to five seconds for discovery,
 then up to 20 for a stored host identity if needed. An unnamed launch fails without stopping
 the session. Input waits remain native and require user action.
 
 CLI stop resolves a host's saved id or current discovered id through harness and live client
-PID. Ambiguous matches are refused. Codex lacks supported per-thread stop;
-daemon stop affects all its threads, and history operations do not substitute for stopping.
+PID. Ambiguous matches are refused. Codex has no stop command, so a daemon thread is stopped
+over its home's control socket, with or without a client attached: `turn/interrupt` for the
+turn `thread/turns/list` reports in progress, then `thread/backgroundTerminals/clean`, because
+an interrupted command keeps running as a background terminal. Stop returns once the daemon
+lists neither, and a thread running nothing succeeds with nothing stopped. Attached clients stay
+open, queued notes stay queued, and the thread remains loaded and resumable. The terminal
+calls need the protocol's experimental capability. A `codex-<pid>` or host id stops only that
+client, which leaves a turn it started running in the daemon; stop the thread id instead.
 
 Detached Claude launch was verified with 2.1.278, and Codex with 0.162.1: the thread finished
-its turn and took a later note with no client attached. pi 0.85.1 and OpenCode 1.18.31 were
+its turn and took a later note with no client attached, and a stop with no client attached
+interrupted a turn and ended the command it was running. Older Codex protocols and a stop
+during an approval wait are unverified. pi 0.85.1 and OpenCode 1.18.31 were
 verified against a loopback provider: launched with no terminal, each took the instruction as
 its first user message, `cones ls` and `cones stop` took the returned id, a dashboard started
 afterwards listed the session and opened its host, the host outlived that dashboard, and the
