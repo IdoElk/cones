@@ -1685,23 +1685,86 @@ pub fn stop(claude: &Path, session_id: &str) -> Result<bool> {
         let claude = crate::harness::executable(&spec.name, &crate::harness::launch_path())
             .with_context(|| format!("{} not found", spec.name))?;
         let short = session_id.get(..8).context("invalid session id")?;
-        let out = Command::new(claude)
-            .args(crate::harness::spec::args(
-                &spec.commands.remove,
-                &[("id", session_id.as_ref()), ("short_id", short.as_ref())],
-            )?)
-            .stdin(Stdio::null())
-            .output()?;
-        ensure!(
-            out.status.success(),
-            "claude rm: {}{}",
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        let args = crate::harness::spec::args(
+            &spec.commands.remove,
+            &[("id", session_id.as_ref()), ("short_id", short.as_ref())],
+        )?;
+        let rm = |extra: &[&str]| {
+            Command::new(&claude)
+                .args(&args)
+                .args(extra)
+                .stdin(Stdio::null())
+                .output()
+        };
+        let mut out = rm(&[])?;
+        let refusal = String::from_utf8_lossy(&out.stderr).into_owned();
+        let kept_worktree = refusal.contains("--discard-unpushed ");
+        if !out.status.success()
+            && let Some(token) = merged_discard(&refusal)
+        {
+            out = rm(&["--discard-unpushed", &token])?;
+        }
+        if !out.status.success() {
+            let native = anyhow::anyhow!(
+                "claude rm: {}{}",
+                String::from_utf8_lossy(&out.stdout).trim(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return Err(if kept_worktree {
+                native.context("worktree has unmerged work; merge it, then delete again")
+            } else {
+                native
+            });
+        }
         return Ok(true);
     }
     let pid = session.pid.context("session has no harness pid")?;
     terminate(pid, &session.harness)
+}
+
+/// The discard token from a `claude rm` refusal to delete a worktree with unpushed commits,
+/// when discarding loses nothing: the worktree is clean and another local or remote branch
+/// already holds its head, as after merging the branch into main.
+fn merged_discard(refusal: &str) -> Option<String> {
+    let worktree = refusal
+        .split_once("worktree is still at “")?
+        .1
+        .split_once('”')?
+        .0;
+    let token = refusal
+        .split_once("--discard-unpushed ")?
+        .1
+        .split_whitespace()
+        .next()?;
+    let head = token.split_once('@')?.0;
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(worktree)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    if !git(&["status", "--porcelain"])?.trim().is_empty() {
+        return None;
+    }
+    let own = git(&["symbolic-ref", "-q", "HEAD"]).unwrap_or_default();
+    let holders = git(&[
+        "for-each-ref",
+        "--format=%(refname)",
+        "--contains",
+        head,
+        "refs/heads",
+        "refs/remotes",
+    ])?;
+    holders
+        .lines()
+        .any(|r| r != own.trim())
+        .then(|| token.to_owned())
 }
 
 /// SIGTERM a harness client by pid, for sessions no registry lists.

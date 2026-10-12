@@ -651,6 +651,122 @@ fn ctrl_x_twice_removes_a_background_session_through_claude_rm() {
     d.quit();
 }
 
+/// Claude keeps a session whose worktree has commits no remote holds. When a local branch already
+/// holds them, as after merging the worktree into main, the delete discards the worktree; work
+/// held nowhere else stays, and the refusal is shown.
+#[test]
+fn ctrl_x_twice_removes_a_session_whose_worktree_is_merged_and_keeps_unmerged_work() {
+    let mut d = Dashboard::new("claude-remove-worktree", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    let project = real_project(&d);
+    let repo = d.home().join("repo");
+    let git = |dir: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let (merged_tree, open_tree) = (d.home().join("merged"), d.home().join("open"));
+    for (tree, branch) in [(&merged_tree, "merged"), (&open_tree, "open")] {
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch,
+                tree.to_str().unwrap(),
+            ],
+        );
+        git(tree, &["commit", "-q", "--allow-empty", "-m", branch]);
+    }
+    git(&repo, &["merge", "-q", "--ff-only", "merged"]);
+    let mut merged = seed(&d, &project, 1, "Merged work", "idle", None);
+    let open = seed(&d, &project, 2, "Open work", "idle", None);
+    let claude = d.home().join(".claude");
+    for (s, tree) in [(&merged, &merged_tree), (&open, &open_tree)] {
+        fs::write(
+            claude.join(format!("rm-worktree-{}", s.short)),
+            tree.to_str().unwrap(),
+        )
+        .unwrap();
+    }
+    d.start();
+    d.wait_text("Open work");
+    d.press("down", DOWN);
+    let screen = d.wait_text(&format!("fixture attached to {}", open.short));
+    assert!(selected(&screen).contains("Open work"), "{screen}");
+    d.press("ctrl+x", CTRL_X);
+    d.wait_text("ctrl+x again to delete");
+    d.press("ctrl+x", CTRL_X);
+    let screen = d.wait_text("delete failed: Open work: worktree has unmerged work");
+    d.capture("unmerged-kept");
+    assert!(selected(&screen).contains("Open work"), "{screen}");
+    let rm: Vec<_> = calls(&d).into_iter().filter(|c| c[0] == "rm").collect();
+    assert_eq!(rm, [vec!["rm".to_owned(), open.short.clone()]]);
+
+    d.press("up", UP);
+    d.wait_for("Merged work selected", |s| {
+        selected(s).contains("Merged work")
+    });
+    d.press("ctrl+x", CTRL_X);
+    d.wait_text("ctrl+x again to delete");
+    d.press("ctrl+x", CTRL_X);
+    let screen = d.wait_for("the row removed", |s| !s.contains("Merged work"));
+    d.capture("merged-removed");
+    assert!(screen.contains("Open work"), "{screen}");
+    let rm: Vec<_> = calls(&d)
+        .into_iter()
+        .filter(|c| c[0] == "rm")
+        .skip(1)
+        .collect();
+    let head = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&merged_tree)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let token = format!("{}@0123abcd", head.trim());
+    assert_eq!(
+        rm,
+        [
+            vec!["rm".to_owned(), merged.short.clone()],
+            vec![
+                "rm".to_owned(),
+                merged.short.clone(),
+                "--discard-unpushed".to_owned(),
+                token
+            ],
+        ]
+    );
+    merged.daemon.wait().unwrap();
+    d.keep("home/claude-calls.jsonl");
+    d.quit();
+}
+
 /// A session outlives its folder when an agent starts one in a scratch directory and deletes
 /// it. Claude cannot wake it, so enter names the missing folder instead of a spawn error.
 #[test]

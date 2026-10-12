@@ -15646,6 +15646,8 @@ impl App {
 
     fn poll_stops(&mut self) {
         let mut finished = false;
+        // A delete hides its row while it runs; a refused one comes back under the cursor.
+        let mut refused = None;
         for action in std::mem::take(&mut self.stopping) {
             let result = match action.result.try_recv() {
                 Err(mpsc::TryRecvError::Empty) => {
@@ -15679,11 +15681,20 @@ impl App {
                 }
                 Ok(true) => "stop requested".into(),
                 Ok(false) => "already finished".into(),
-                Err(e) => format!("{} failed: {}: {e:#}", action.verb, action.label),
+                Err(e) => {
+                    if matches!(action.verb, "delete" | "forget") {
+                        refused = Some(action.id.clone());
+                    }
+                    // The outer message fits the hint line; the debug log keeps the whole chain.
+                    format!("{} failed: {}: {e}", action.verb, action.label)
+                }
             };
         }
         if finished {
             self.rebuild_with_reason("action_result");
+            if let Some(id) = refused {
+                self.select_row(&id);
+            }
             self.feedback
                 .get_or_insert(("action_result_to_draw", Instant::now()));
             self.invalidate();

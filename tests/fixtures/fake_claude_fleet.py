@@ -15,7 +15,9 @@ way the daemon can take a while to report a session.
 draws the composer of Claude's fullscreen renderer (`CLAUDE_CODE_NO_FLICKER=1`): hidden terminal
 cursor, inverse software caret after `❯`. Typed text becomes a draft and every read from the pty
 is logged to `$HOME/attach-input.jsonl`; `rm` ends the session the way the
-daemon does: registry entry and job record removed, stand-in killed.
+daemon does: registry entry and job record removed, stand-in killed. With
+`$CLAUDE_CONFIG_DIR/rm-worktree-<short>` naming a worktree, `rm` refuses the way Claude does for
+unpushed commits until it is given `--discard-unpushed`.
 """
 import json
 import os
@@ -76,6 +78,17 @@ if args[:1] == ["attach"]:
 
 if args[:1] == ["rm"]:
     short = args[1]
+    worktree = CLAUDE / f"rm-worktree-{short}"
+    if worktree.exists() and "--discard-unpushed" not in args:
+        # Claude keeps a session whose worktree holds commits no remote has.
+        path = worktree.read_text().strip()
+        head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+        print(f"kept {short} \u2014 its worktree is still at \u201c{path}\u201d\n"
+              f"  1 unpushed commits on \u201cfeature\u201d. They exist on no remote.\n"
+              f"  push them and run 'claude rm {short}' again, or discard the worktree and its "
+              f"commits: claude rm {short} --discard-unpushed {head}@0123abcd", file=sys.stderr)
+        sys.exit(1)
     for entry in (CLAUDE / "sessions").glob("*.json"):
         value = json.loads(entry.read_text())
         if value.get("jobId") == short:
