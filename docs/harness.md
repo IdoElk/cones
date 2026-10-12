@@ -368,6 +368,16 @@ Hosted launches wait up to five seconds for discovery,
 then up to 20 for a stored host identity if needed. An unnamed launch fails without stopping
 the session. Input waits remain native and require user action.
 
+A hosted launch watches its client for three seconds, and until it is named. A client that
+exits in that time fails the launch with its exit status, the last screen that had text on it
+and the first line of its stderr; no id is printed and no host remains. A client that exits
+later is not caught. A client that stays alive is named whatever it shows: no harness
+definition declares its sign-in, trust or update screens, so cones does not recognise them.
+When the harness has reported no conversation of its own, stderr carries the client's screen
+for the caller to read, and a prompt the client has not taken is otherwise indistinguishable
+from one it has. A dashboard cannot open the terminal during the watch. Codex launches with a
+prompt are not watched this way.
+
 CLI stop resolves a host's saved id or current discovered id through harness and live client
 PID. Ambiguous matches are refused. Codex lacks supported per-thread stop;
 daemon stop affects all its threads, and history operations do not substitute for stopping.

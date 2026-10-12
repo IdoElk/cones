@@ -210,7 +210,10 @@ persistent hosts. Each prints a discovered identifier on stdout, with its kind o
 survives the launching shell, so no terminal is needed. See [detached identities and
 verification limits](harness.md#detached-launch) before using the returned id with other commands.
 
-An unnamed launch exits nonzero without printing an id or stopping the started session.
+An unnamed launch exits nonzero without printing an id or stopping the started session. A
+hosted client that exits during its launch also exits nonzero with no id, and the error quotes
+its last screen; one still alive on a sign-in or trust screen is named, with that screen on
+stderr. See [detached launch](harness.md#detached-launch) for what is and is not caught.
 Concurrent identical prompts receive separate owned identities. The [launch ledger](#diagnostics)
 retains submissions and identification outcomes, including with debug off.
 

@@ -823,6 +823,19 @@ fn peer_inbox_send(
     Ok(())
 }
 
+/// Why a session in its own terminal cannot be opened here, and what its harness's definition
+/// says can be done instead: a conversation cones reads can be shown, and resumed once it ends.
+pub fn own_terminal(harness: &str) -> String {
+    let refusal = format!("{harness} runs in its own terminal and cannot be joined from here");
+    match by_name(harness) {
+        Some(spec) if spec.transcript.available && spec.operations.resume.is_some() => {
+            format!("{refusal} · read it with `cones show`, resume it from history once it ends")
+        }
+        Some(spec) if spec.transcript.available => format!("{refusal} · read it with `cones show`"),
+        _ => format!("{refusal} · it keeps no conversation cones can read, so use that terminal"),
+    }
+}
+
 /// One native join contract for Enter and hover. Hover is forbidden from launching a session.
 pub fn join(
     session: &crate::fleet::Session,
@@ -831,10 +844,7 @@ pub fn join(
 ) -> Result<std::process::Command> {
     let spec = by_name(&session.harness).context("unknown session harness")?;
     let mut command = match spec.session(session.kind.as_deref()).join {
-        spec::Join::Unavailable => bail!(
-            "{} runs in its own terminal and cannot be joined from here",
-            spec.name
-        ),
+        spec::Join::Unavailable => bail!(own_terminal(&spec.name)),
         spec::Join::Attach => Claude.attach(&session.session_id, &session.cwd),
         spec::Join::CodexRemote => {
             check_operation(spec, &spec.operations.attach, "attach")?;

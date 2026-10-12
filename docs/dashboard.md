@@ -158,7 +158,9 @@ controls clipping in narrow lists. Times display in the local timezone.
 | Unknown | `-` |
 
 Harness marks stay still. The coordinator has an orange `★` title, identified by its claim.
-An external session without native attach support says `own terminal`.
+An external session without native attach support says `own terminal`. Enter on it names what
+is left: `cones show` and a resume from history once it ends where cones reads the harness's
+conversations, and otherwise only that terminal.
 
 | Key | Action |
 | --- | --- |

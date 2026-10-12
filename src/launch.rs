@@ -209,43 +209,134 @@ fn hosted(
 ) -> Result<Launched> {
     let record = host(state, kind, dir, prompt, owned, command)?;
     // Past here the native client is running. Failing to name it is a reporting failure and
-    // never a reason to stop it: the host record names it for the dashboard either way.
+    // never a reason to stop it: the host record names it for the dashboard either way. A
+    // client that has already left is a different thing, and is reported as no launch at all.
     let pid = record.session.pid;
     let name = kind.to_string();
     // What discovery calls the client before the harness reports a conversation of its own.
     let process_key = pid.map(|pid| format!("{kind}-{pid}"));
+    let started = Instant::now();
+    let mut watch = Watch::new(kind, record);
     // The harness's own row is what the roster keeps once discovery reports the client, so it
     // is worth a short wait: returning ours first would name a row that is about to be
     // replaced. A harness discovery never reports keeps the owned id, which its host record
     // holds for as long as the host runs.
-    let discovered = settle(DISCOVER, claude, state, policy, |s| {
-        pid.is_some() && s.pid == pid && s.harness == name
-    })?;
-    let row = match discovered.into_iter().next() {
-        Some(row) => row,
-        None => settle(SETTLE, claude, state, policy, |s| s.session_id == owned)?
-            .into_iter()
-            .next()
-            .with_context(|| {
-                format!(
-                    "{kind} was hosted as {owned} with pid {} but no row for it reached the \
-                     roster in {}s. It is still running: reach it from the dashboard, or see {}",
-                    pid.map_or_else(|| "none".into(), |p| p.to_string()),
-                    SETTLE.as_secs(),
-                    state.join("launches.jsonl").display()
-                )
-            })?,
+    let row = loop {
+        watch.alive()?;
+        let waited = started.elapsed();
+        let found = settle(Duration::ZERO, claude, state, policy, |s| {
+            (pid.is_some() && s.pid == pid && s.harness == name)
+                || (waited >= DISCOVER && s.session_id == owned)
+        })?;
+        if let Some(row) = found.into_iter().next()
+            && waited >= watch_for()
+        {
+            break row;
+        }
+        ensure!(
+            waited < DISCOVER + SETTLE,
+            "{kind} was hosted as {owned} with pid {} but no row for it reached the roster in \
+             {}s. It is still running: reach it from the dashboard, or see {}",
+            pid.map_or_else(|| "none".into(), |p| p.to_string()),
+            (DISCOVER + SETTLE).as_secs(),
+            state.join("launches.jsonl").display()
+        );
+        std::thread::sleep(POLL);
     };
+    // The roster pass takes a moment of its own, and a row is no proof the client outlived it.
+    watch.alive()?;
+    let identity = match &row.session_id {
+        id if *id == owned => Identity::Owned,
+        id if Some(id.as_str()) == process_key.as_deref() => Identity::Process,
+        _ => Identity::Native,
+    };
+    // A live client may still be asking to sign in, to trust the folder or to update. cones
+    // reads no harness's screens, so it shows the screen instead of calling the prompt taken.
+    if identity != Identity::Native && !watch.shown.is_empty() {
+        eprintln!(
+            "{kind} has reported no conversation of its own yet. Its screen shows:\n{}",
+            watch.shown
+        );
+    }
     Ok(Launched {
-        identity: match &row.session_id {
-            id if *id == owned => Identity::Owned,
-            id if Some(id.as_str()) == process_key.as_deref() => Identity::Process,
-            _ => Identity::Native,
-        },
+        identity,
         id: row.session_id,
         harness: name,
         pid,
     })
+}
+
+/// How long a hosted client has to stay alive before its launch is called one. A client that
+/// refuses to start, or leaves at a sign-in question, is gone well inside it. Shortened when
+/// `CONES_TEST_FAST` is set, which changes how long cones waits and never what it decides.
+fn watch_for() -> Duration {
+    if std::env::var_os("CONES_TEST_FAST").is_some() {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_secs(3)
+    }
+}
+
+/// The launch's own view of the client it just hosted. The host keeps the pty only while the
+/// client lives, so the screen has to be read before the exit, not after it. While this is
+/// held a dashboard cannot open the same terminal, which is why it is dropped with the launch.
+struct Watch {
+    kind: HarnessKind,
+    viewer: std::io::Result<crate::viewer::Viewer>,
+    /// The last screen that had text on it, indented. A client leaving the alternate screen
+    /// blanks its terminal on the way out, so the final screen alone says nothing.
+    shown: String,
+}
+
+impl Watch {
+    fn new(kind: HarnessKind, record: terminal_host::Record) -> Self {
+        Self {
+            kind,
+            viewer: crate::viewer::Viewer::attach(record, Colors::default()),
+            shown: String::new(),
+        }
+    }
+
+    /// Fail the launch when the client has exited, with what it last showed.
+    fn alive(&mut self) -> Result<()> {
+        let kind = self.kind;
+        let viewer = match &mut self.viewer {
+            Ok(viewer) => viewer,
+            Err(error) => bail!("{kind} exited before cones could read its screen: {error}"),
+        };
+        let gone = viewer.pump().is_err();
+        let lines: Vec<String> = viewer
+            .screen()
+            .contents()
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty())
+            .map(|line| format!("  {line}"))
+            .collect();
+        if !lines.is_empty() {
+            // ponytail: the last twelve lines with text, enough for a question and its context.
+            self.shown = lines[lines.len().saturating_sub(12)..].join("\n");
+        }
+        let status = viewer.exited();
+        if status.is_none() && !gone {
+            return Ok(());
+        }
+        let said = String::from_utf8_lossy(viewer.stderr_tail());
+        bail!(
+            "{kind} exited {} during its launch, so there is no session. {}{}",
+            status
+                .and_then(|s| s.code())
+                .map_or_else(|| "with no status".into(), |code| code.to_string()),
+            match self.shown.as_str() {
+                "" => "It showed nothing on its screen.".into(),
+                shown => format!("Its screen last showed:\n{shown}"),
+            },
+            match first_line(&said) {
+                Some(line) => format!("\nIt reported: {line}"),
+                None => String::new(),
+            }
+        )
+    }
 }
 
 /// Give the client a detached terminal host and return its record.

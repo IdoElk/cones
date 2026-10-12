@@ -10,6 +10,8 @@ which is where `harness::launch_path` looks first. The shebang names the interpr
   no-id    start, print an unusable line instead of a background id
   fail     refuse to start, with a diagnostic on stderr
   twice    codex only: report two threads for the one prompt
+  login    pi only: ask a sign-in question, then exit shortly after
+  stuck    pi only: ask the same question and wait on it
 """
 import json
 import os
@@ -61,8 +63,16 @@ if name == "pi":
         sys.exit(3)
     # A terminal client: hold the pty, report the prompt it was given, and wait to be
     # stopped. This is what a detached launch has to keep alive past its launcher.
-    sys.stdout.write(f"pi fixture ready: {' '.join(args)}\r\n")
+    if mode in ("login", "stuck"):
+        # A client that is not signed in asks its question instead of taking the prompt.
+        sys.stdout.write("No API key found. Starting login flow...\r\n"
+                         "Would you like to log in to the fixture? [(y)es, (n)o]: ")
+    else:
+        sys.stdout.write(f"pi fixture ready: {' '.join(args)}\r\n")
     sys.stdout.flush()
+    if mode == "login":
+        time.sleep(0.3)
+        sys.exit(1)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     while True:
         time.sleep(0.05)
