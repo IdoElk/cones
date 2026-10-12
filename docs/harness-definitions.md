@@ -178,6 +178,8 @@ empty when no native override is verified; never invent one.
 Node/Bun script operands by relative suffix, excluding names in prompt arguments.
 `process_title` matches the complete replaced title, as for Kimi.
 
+A launch that omits `prompt`, `prompt_flag` and `stdin_prompt` has no interactive
+instruction, and starting it with one is refused.
 `operations.launch.prompt_flag` sends one `--flag=value` argument. Mutually exclusive
 `stdin_prompt: true` uses an anonymous input file while stdout remains a terminal;
 cancellation closes that file.

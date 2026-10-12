@@ -1,8 +1,9 @@
 #!/usr/bin/python3
 """Disposable launch targets for the detached-launch tests. No model is contacted.
 
-Installed under a fixture HOME as `.local/bin/claude`, `.local/bin/pi` and `.local/bin/codex`,
-which is where `harness::launch_path` looks first. The shebang names the interpreter directly so `ps` shows
+Installed under a fixture HOME as `.local/bin/claude`, `.local/bin/pi`, `.local/bin/kimi` and
+`.local/bin/codex`, which is where `harness::launch_path` looks first, and as the native
+`copilot` binary inside a fixture npm package. The shebang names the interpreter directly so `ps` shows
 `python3 <path>/pi`, the form pi's process discovery recognises.
 
 `FAKE_LAUNCH` selects the failure being exercised:
@@ -52,20 +53,25 @@ if name == "claude":
     print(f"backgrounded · {session[:8]} (idle)")
     sys.exit(0)
 
-if name == "pi":
+if name in ("pi", "kimi", "copilot"):
     if "--version" in args:
         print("0.0.0-fixture")
+        sys.exit(0)
+    if "--help" in args:
+        print("--model  choose a model\n--interactive, --prompt  start with an instruction")
         sys.exit(0)
     if mode == "fail":
         print("fixture refused this launch", file=sys.stderr)
         sys.exit(3)
     # A terminal client: hold the pty, report the prompt it was given, and wait to be
     # stopped. This is what a detached launch has to keep alive past its launcher.
-    sys.stdout.write(f"pi fixture ready: {' '.join(args)}\r\n")
+    sys.stdout.write(f"{name} fixture ready: {' '.join(args)}\r\n")
     sys.stdout.flush()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    while True:
+    # An orphan has lost the loader or host that owned it, so it ends with them.
+    while os.getppid() != 1:
         time.sleep(0.05)
+    sys.exit(0)
 
 if name == "codex":
     home = pathlib.Path(os.environ["CODEX_HOME"])

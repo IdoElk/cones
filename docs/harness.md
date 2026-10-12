@@ -373,9 +373,17 @@ PID. Ambiguous matches are refused. Codex lacks supported per-thread stop;
 daemon stop affects all its threads, and history operations do not substitute for stopping.
 
 Detached Claude launch was verified with 2.1.278, and Codex with 0.162.1: the thread finished
-its turn and took a later note with no client attached. The detached CLI workflow remains unverified
-for hosted detach/rejoin through the dashboard, detached resume, OpenCode identity and
-experimental launchers. Their composer checks do not establish detached CLI support.
+its turn and took a later note with no client attached. pi 0.85.1 and OpenCode 1.18.31 were
+verified against a loopback provider: launched with no terminal, each took the instruction as
+its first user message, `cones ls` and `cones stop` took the returned id, a dashboard started
+afterwards listed the session and opened its host, the host outlived that dashboard, and the
+stopped conversation resumed from history with its earlier turns. `cones show` takes their
+`native_id`, not the returned process id. Gemini 0.60.0, Cursor Agent 2026.09.18-9a7762b,
+Copilot 1.0.95, Amp 0.0.1789790452-gad4023 and Droid 0.223.0 were launched the same way with no
+login and no network: each was named, listed, opened from a later dashboard and stopped. None
+got past its trust or sign-in screen, so whether it takes the instruction remains unverified;
+Amp's sign-in question consumes it. Detached resume of a Claude or Codex launch remains
+unverified.
 
 Model/provider settings follow [configuration](jobs.md#composer-harnesses). Claude and pi take
 effort flags; Codex and OpenCode receive none. Codex's daemon keeps its configured provider,
@@ -404,11 +412,12 @@ rewrites are installed.
 | Copilot | `--interactive=` | `--model` | 1.0.86 |
 | Amp | Anonymous stdin file | Native config | 0.0.1789704050-g778045 |
 | Droid | Positional after `--` | Native config | 0.222.0 |
-| Kimi | `--prompt=` | `--model` | 1.50.0 |
+| Kimi | None; an instruction is refused | `--model` | 2.1.1 |
 
 Native boot, process identity, return/reuse and stop were checked with disposable homes.
 Model-backed turns, permission questions and conversation reporting remain unverified.
-These are not full harness integrations. Kimi replaces its process title with `Kimi Code`,
+These are not full harness integrations. Kimi's `--prompt` answers and exits, and 2.1.1
+refuses it beside `--auto`, so Kimi starts only without an instruction. Kimi replaces its process title with `Kimi Code`,
 so management commands using that title cannot be distinguished. Tab/Left remain native;
 configured AWS profile/region are passed as for other launches.
 

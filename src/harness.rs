@@ -74,6 +74,12 @@ pub fn start(kind: HarnessKind, dir: &Path, prompt: &str, policy: &Policy) -> Re
         .as_ref()
         .context("harness has no launch operation")?;
     let name = kind.to_string();
+    // Dropping the instruction would start a session that looks like the one asked for.
+    ensure!(
+        prompt.is_empty() || !launch.prompt.is_empty(),
+        "{name} cannot open an interactive session with an instruction; start it without \
+         one and type the instruction there"
+    );
     let path = executable(&name, &launch_path())
         .ok_or_else(|| anyhow::anyhow!("{name} not found on the launch PATH"))?;
     let path = native_executable(kind, path);
@@ -169,11 +175,19 @@ fn native_executable(kind: HarnessKind, path: PathBuf) -> PathBuf {
         "x86_64" => "x64",
         _ => return path,
     };
-    let Some(scope) = loader.parent().and_then(Path::parent) else {
+    let Some(package) = loader.parent() else {
         return path;
     };
-    let package = scope.join(format!("copilot-darwin-{arch}"));
-    executable("copilot", &package.to_string_lossy()).unwrap_or(path)
+    // npm puts the platform package beside the loader's package or nests it inside,
+    // depending on the Copilot release.
+    let platform = format!("copilot-darwin-{arch}");
+    [
+        package.with_file_name(&platform),
+        package.join("node_modules/@github").join(&platform),
+    ]
+    .iter()
+    .find_map(|dir| executable("copilot", &dir.to_string_lossy()))
+    .unwrap_or(path)
 }
 
 fn stdin_prompt(mut command: std::process::Command, prompt: &str) -> Result<std::process::Command> {
@@ -1817,8 +1831,7 @@ mod tests {
             match kind {
                 HarnessKind::Gemini => assert_eq!(args, [format!("--prompt-interactive={prompt}")]),
                 HarnessKind::Copilot => assert_eq!(args, [format!("--interactive={prompt}")]),
-                HarnessKind::Kimi => assert_eq!(args, [format!("--prompt={prompt}")]),
-                HarnessKind::Amp => assert!(args.is_empty()),
+                HarnessKind::Amp | HarnessKind::Kimi => assert!(args.is_empty()),
                 HarnessKind::Cursor | HarnessKind::Droid => assert_eq!(args, ["--", prompt]),
                 _ => unreachable!(),
             }
