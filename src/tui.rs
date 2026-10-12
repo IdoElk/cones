@@ -2344,6 +2344,13 @@ fn bold() -> Style {
 fn dim() -> Style {
     Style::default().add_modifier(Modifier::DIM)
 }
+
+/// A status that reports a problem. The mark it leads with moves it out of the hint bar and
+/// onto the composer's top rule, where it is drawn bold.
+fn warning(message: impl std::fmt::Display) -> String {
+    format!("{WARNING}{message}")
+}
+const WARNING: &str = "⚠ ";
 fn button() -> Style {
     Style::default().bg(Color::Indexed(237)).fg(Color::White)
 }
@@ -3390,27 +3397,7 @@ fn next_runs(jobs: &[ResolvedJob]) -> BTreeMap<String, chrono::DateTime<chrono::
 /// typed folder such as `~` or `..`. Matches carry the `/` a shell lists them with.
 /// Hidden directories require a `.` prefix.
 pub fn complete_dir(text: &str, base: &Path) -> (String, Vec<String>) {
-    let (parent, partial) = match text.rfind('/') {
-        Some(i) => (&text[..=i], &text[i + 1..]),
-        None => ("", text),
-    };
-    let dir = if parent.is_empty() {
-        base.to_path_buf()
-    } else {
-        match crate::expand_path(Path::new(parent), base) {
-            Ok(d) => d,
-            Err(_) => return (text.to_string(), Vec::new()),
-        }
-    };
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with(partial) && (!n.starts_with('.') || partial.starts_with('.')))
-        .collect();
-    names.sort();
+    let (parent, partial, names) = dir_matches(text, base);
     let listed = || names.iter().map(|n| format!("{n}/")).collect();
     match names.as_slice() {
         [] if !partial.is_empty()
@@ -3433,6 +3420,32 @@ pub fn complete_dir(text: &str, base: &Path) -> (String, Vec<String>) {
             (format!("{parent}{}", &first[..common]), listed())
         }
     }
+}
+
+/// The typed parent, the partial name after it, and the sorted directories that name could
+/// still become.
+fn dir_matches<'a>(text: &'a str, base: &Path) -> (&'a str, &'a str, Vec<String>) {
+    let (parent, partial) = match text.rfind('/') {
+        Some(i) => (&text[..=i], &text[i + 1..]),
+        None => ("", text),
+    };
+    let dir = if parent.is_empty() {
+        Ok(base.to_path_buf())
+    } else {
+        crate::expand_path(Path::new(parent), base)
+    };
+    let mut names: Vec<String> = dir
+        .ok()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(partial) && (!n.starts_with('.') || partial.starts_with('.')))
+        .collect();
+    names.sort();
+    (parent, partial, names)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -8975,6 +8988,8 @@ const WHEEL_LINES: i32 = 3;
 /// Folders offered under `+ add folder`. Enough to cover the day's work, short enough that
 /// the list below it stays on screen.
 const SUGGESTIONS: usize = 6;
+/// The most completions of a typed path `+ add folder` lists.
+const COMPLETIONS: usize = 12;
 
 const AGENT_VIEW_TITLE: &str = "claude agents";
 
@@ -10305,7 +10320,7 @@ impl App {
                         }
                         Err(error) => {
                             if response.cursor.is_some() {
-                                self.status = format!("Preview: {error:#}");
+                                self.status = warning(format!("Preview: {error:#}"));
                             }
                             self.transcript.error = Some(format!("{error:#}"));
                         }
@@ -10708,7 +10723,7 @@ impl App {
                             if self.text.is_empty() {
                                 self.fill(prompt);
                             }
-                            self.status = message;
+                            self.status = warning(message);
                         }
                         None => {
                             if let Some(p) =
@@ -10730,7 +10745,7 @@ impl App {
                         })
                     });
                     self.pending.retain(|p| p.session.session_id != id);
-                    self.status = "session launch stopped unexpectedly".into();
+                    self.status = warning("session launch stopped unexpectedly");
                     launched = true;
                 }
             }
@@ -10784,7 +10799,7 @@ impl App {
                         "error": format!("{e:#}"), "retained_previous_rows": true,
                     })
                 });
-                self.status = format!("reload failed: {e:#}");
+                self.status = warning(format!("reload failed: {e:#}"));
                 self.stale = true;
                 self.refreshed = Instant::now();
             }
@@ -10795,7 +10810,7 @@ impl App {
                         "error": "worker disconnected", "retained_previous_rows": true,
                     })
                 });
-                self.status = "reload failed: worker disconnected".into();
+                self.status = warning("reload failed: worker disconnected");
                 self.stale = true;
                 self.refreshed = Instant::now();
             }
@@ -10894,7 +10909,9 @@ impl App {
         match self.attention.update(&self.state, &observations, &reviewed) {
             Ok(notices) if self.data.start.notify => attention::notify(notices),
             Ok(_) => {}
-            Err(error) => self.status = format!("attention markers could not be saved: {error}"),
+            Err(error) => {
+                self.status = warning(format!("attention markers could not be saved: {error}"))
+            }
         }
     }
 
@@ -10911,7 +10928,9 @@ impl App {
             &HashSet::from([observation.key.clone()]),
         ) {
             Ok(_) => self.rebuild_with_reason("completion_reviewed"),
-            Err(error) => self.status = format!("attention markers could not be saved: {error}"),
+            Err(error) => {
+                self.status = warning(format!("attention markers could not be saved: {error}"))
+            }
         }
     }
 
@@ -10924,7 +10943,7 @@ impl App {
             });
         }
         let history_browsing = self.history_selected();
-        if self.status.starts_with("reload failed:") {
+        if self.status.contains("reload failed:") {
             self.status.clear();
         }
         self.stale = false;
@@ -11301,8 +11320,9 @@ impl App {
                             ) {
                                 Ok(()) => fork.saved = true,
                                 Err(e) => {
-                                    self.status =
-                                        format!("fork relationship could not be saved: {e}")
+                                    self.status = warning(format!(
+                                        "fork relationship could not be saved: {e}"
+                                    ))
                                 }
                             }
                         }
@@ -11629,7 +11649,7 @@ impl App {
             .spawn();
         self.status = match r {
             Ok(_) => what.to_owned(),
-            Err(e) => format!("{what} failed: {e}"),
+            Err(e) => warning(format!("{what} failed: {e}")),
         };
     }
 
@@ -11800,7 +11820,7 @@ impl App {
                     fleet::tilde(&self.jobs_path)
                 )
             }
-            Err(e) => format!("pane width kept for this dashboard only: {e:#}"),
+            Err(e) => warning(format!("pane width kept for this dashboard only: {e:#}")),
         };
     }
 
@@ -11875,7 +11895,7 @@ impl App {
         let mut ids: Vec<&String> = self.pinned.iter().collect();
         ids.sort();
         if let Err(e) = std::fs::write(self.state.join(PINS), serde_json::to_vec(&ids).unwrap()) {
-            self.status = format!("pin kept for this dashboard only: {e}");
+            self.status = warning(format!("pin kept for this dashboard only: {e}"));
         }
         self.rebuild();
     }
@@ -11897,11 +11917,12 @@ impl App {
         };
         let spec = harness::by_name(&session.harness).context("unknown session harness")?;
         if !spec.operations.rename {
-            self.status = "this harness has no rename operation".into();
+            self.status = warning("this harness has no rename operation");
             return Ok(());
         }
         if name.chars().any(char::is_control) {
-            self.status = "a session name must be a single line without control characters".into();
+            self.status =
+                warning("a session name must be a single line without control characters");
             return Ok(());
         }
         let kind = Kind::Session(session.session_id.clone(), String::new());
@@ -11915,7 +11936,7 @@ impl App {
         {
             self.status = match fleet::rename(session, name) {
                 Ok(()) => format!("renamed to {name}"),
-                Err(e) => format!("not renamed: {e:#}"),
+                Err(e) => warning(format!("not renamed: {e:#}")),
             };
             self.invalidate();
             return Ok(());
@@ -11969,7 +11990,8 @@ impl App {
         };
         if pending.started.elapsed() > limit {
             self.rename = None;
-            self.status = "native rename was not submitted · return to the prompt and retry".into();
+            self.status =
+                warning("native rename was not submitted · return to the prompt and retry");
             return true;
         }
         let kind = Kind::Session(id.clone(), String::new());
@@ -12585,7 +12607,7 @@ impl App {
                         "duration_ms": spawning.elapsed().as_secs_f64() * 1000.0,
                     })
                 });
-                self.status = format!("{what} failed: {e}");
+                self.status = warning(format!("{what} failed: {e}"));
                 false
             }
         }
@@ -13062,7 +13084,7 @@ impl App {
                 if focused {
                     self.feedback = Some(("return_to_draw", Instant::now()));
                 }
-                self.status = message;
+                self.status = warning(message);
                 self.event("error", "viewer.failed", || {
                     json!({
                         "viewer": context, "phase": "pump", "error": self.status,
@@ -13313,7 +13335,7 @@ impl App {
                 self.caret = attach(&mut self.text, self.caret, self.images.len());
                 self.images.push(path);
             }
-            Err(e) => self.status = e,
+            Err(e) => self.status = warning(e),
         }
     }
 
@@ -13545,7 +13567,7 @@ impl App {
                 };
                 self.status = match copy::to_clipboard(&text) {
                     Ok(()) => format!("copied {} characters", text.chars().count()),
-                    Err(e) => format!("{e:#}"),
+                    Err(e) => warning(format!("{e:#}")),
                 };
                 true
             }
@@ -13751,7 +13773,7 @@ impl App {
                     "row_id": key, "phase": "prepare", "error": format!("{error:#}"),
                     "duration_ms": opening.operation.as_ref().map(DiagnosticOperation::elapsed_ms),
                 }));
-                self.status = failed;
+                self.status = warning(failed);
                 if self.text.is_empty()
                     && let Some(prompt) = opening.prompt
                 {
@@ -13904,7 +13926,7 @@ impl App {
                     });
                     self.focus(self.viewers.len() - 1);
                 }
-                Err(error) => self.status = format!("return failed: {error}"),
+                Err(error) => self.status = warning(format!("return failed: {error}")),
             }
             return Ok(());
         }
@@ -13985,7 +14007,7 @@ impl App {
                         self.event("error", "viewer.failed", || json!({
                             "row_id": id, "harness": harness, "phase": "join", "error": format!("{e:#}"),
                         }));
-                        self.status = format!("attach failed: {e:#}");
+                        self.status = warning(format!("attach failed: {e:#}"));
                     }
                 }
             }
@@ -14016,7 +14038,7 @@ impl App {
                 if let Err(e) =
                     Ledger::new(&self.state).and_then(|l| l.unhide(&entry.key.session_id))
                 {
-                    self.status = format!("could not restore this session's row: {e:#}");
+                    self.status = warning(format!("could not restore this session's row: {e:#}"));
                 }
                 self.record_recovery(
                     "resume.submitted",
@@ -14162,7 +14184,7 @@ impl App {
             return;
         }
         if self.text.trim().chars().count() < self.data.start.min_prompt {
-            self.status = "too short, describe the task".into();
+            self.status = warning("too short, describe the task");
             return;
         }
         let dir = self.target_dir();
@@ -14420,7 +14442,7 @@ impl App {
             );
         }
         if rows.is_empty() {
-            self.status = "this harness has no verified native fork operation".into();
+            self.status = warning("this harness has no verified native fork operation");
             return;
         }
         self.mode = Mode::Pick(Pick {
@@ -14456,7 +14478,7 @@ impl App {
         let mut export = match transcript::export(&source, &entry.key.harness, Some(SEED_TAIL)) {
             Ok(export) => export,
             Err(e) => {
-                self.status = format!("fork failed: {e:#}");
+                self.status = warning(format!("fork failed: {e:#}"));
                 return;
             }
         };
@@ -14523,7 +14545,7 @@ impl App {
             false
         });
         if let Some(e) = failed {
-            self.status = format!("fork relationship could not be saved: {e}");
+            self.status = warning(format!("fork relationship could not be saved: {e}"));
         }
     }
 
@@ -14531,7 +14553,7 @@ impl App {
         let Some(spec) =
             harness::by_name(&entry.key.harness).filter(|s| s.operations.fork.is_some())
         else {
-            self.status = "this harness has no verified native fork operation".into();
+            self.status = warning("this harness has no verified native fork operation");
             return;
         };
         let kind = spec.kind;
@@ -14614,7 +14636,7 @@ impl App {
     /// What tab does before it reaches the pane, so the hints and the key agree.
     fn tab_does(&self) -> Option<&'static str> {
         if self.on_suggestion().is_some() {
-            return Some("edit path");
+            return Some("next");
         }
         if self.on_new_folder() {
             return (!self.folder.text.is_empty()).then_some("complete");
@@ -14635,7 +14657,7 @@ impl App {
         let command = match terminal::command(&self.shell, &dir, &mut self.shell_startup) {
             Ok(command) => command,
             Err(e) => {
-                self.status = format!("terminal failed: {e}");
+                self.status = warning(format!("terminal failed: {e}"));
                 return;
             }
         };
@@ -14809,7 +14831,7 @@ impl App {
                         self.install(&format!("job {name} deleted"));
                         self.invalidate();
                     }
-                    Err(e) => self.status = format!("delete failed: {e:#}"),
+                    Err(e) => self.status = warning(format!("delete failed: {e:#}")),
                 }
             }
             _ => {
@@ -14825,7 +14847,7 @@ impl App {
             Some(armed) if armed == id => {
                 self.status = match Ledger::new(&self.state).and_then(|l| l.hide(&id)) {
                     Ok(()) => "run hidden · the ledger still has it".into(),
-                    Err(e) => format!("hide failed: {e:#}"),
+                    Err(e) => warning(format!("hide failed: {e:#}")),
                 };
                 self.invalidate();
             }
@@ -14851,7 +14873,7 @@ impl App {
 
     fn save_open_folders(&mut self) {
         if let Err(e) = write_open_folders(&self.state, &self.open_folders) {
-            self.status = format!("open folders kept for this dashboard only: {e}");
+            self.status = warning(format!("open folders kept for this dashboard only: {e}"));
         }
     }
 
@@ -14928,15 +14950,28 @@ impl App {
         let Some(at) = self.rows.iter().position(|r| r.kind == Kind::NewFolder) else {
             return;
         };
-        let rows: Vec<Row> = self
-            .data
-            .folder_suggestions(query, SUGGESTIONS)
-            .into_iter()
-            .map(|dir| Row {
-                kind: Kind::Suggestion(format!("offer {dir}"), dir.clone()),
-                cells: vec![(dir, plain())],
-            })
-            .collect();
+        let pins = self.data.folder_suggestions(query, SUGGESTIONS);
+        // What the typed path could still become, as a shell lists it under the prompt. The
+        // typed parent is dimmed so the names line up as the part still to choose.
+        let mut rows = Vec::new();
+        if !query.is_empty() {
+            let (parent, _, names) = dir_matches(query, &self.cwd);
+            // ponytail: the first COMPLETIONS names; typing another letter narrows the rest.
+            for name in names.into_iter().take(COMPLETIONS) {
+                let dir = format!("{parent}{name}/");
+                if pins.iter().any(|pin| *pin == dir.trim_end_matches('/')) {
+                    continue;
+                }
+                rows.push(Row {
+                    kind: Kind::Suggestion(format!("offer {dir}"), dir),
+                    cells: vec![(parent.to_owned(), dim()), (format!("{name}/"), plain())],
+                });
+            }
+        }
+        rows.extend(pins.into_iter().map(|dir| Row {
+            kind: Kind::Suggestion(format!("offer {dir}"), dir.clone()),
+            cells: vec![(dir, plain())],
+        }));
         self.rows.splice(at + 1..at + 1, rows);
     }
 
@@ -14961,19 +14996,22 @@ impl App {
         {
             if self.create_folder.take().as_ref() != Some(&path) {
                 // The hint leads: a long path would push it off the line.
-                self.status = format!("no such folder · enter creates {}", fleet::tilde(&path));
+                self.status = warning(format!(
+                    "no such folder · enter creates {}",
+                    fleet::tilde(&path)
+                ));
                 self.create_folder = Some(path);
                 return;
             }
             if let Err(e) = std::fs::create_dir_all(&path) {
-                self.status = format!("{}: {e}", fleet::tilde(&path));
+                self.status = warning(format!("{}: {e}", fleet::tilde(&path)));
                 return;
             }
         }
         let dir = match launch_dir(&text, &self.cwd, &self.cwd) {
             Ok(dir) => dir,
             Err(e) => {
-                self.status = e;
+                self.status = warning(e);
                 return;
             }
         };
@@ -15056,10 +15094,13 @@ impl App {
                     )));
                 }
                 None => {
-                    self.status = format!("{name} is not in {}", fleet::tilde(&self.jobs_path));
+                    self.status = warning(format!(
+                        "{name} is not in {}",
+                        fleet::tilde(&self.jobs_path)
+                    ));
                 }
             },
-            Err(e) => self.status = format!("{e:#}"),
+            Err(e) => self.status = warning(format!("{e:#}")),
         }
     }
 
@@ -15137,7 +15178,7 @@ impl App {
     }
 
     fn hint_line(&self) -> Line<'static> {
-        if !self.status.is_empty() {
+        if !self.status.is_empty() && !self.status.starts_with(WARNING) {
             let style = if self.quitting() {
                 Style::default().fg(Color::Red)
             } else {
@@ -15349,11 +15390,9 @@ impl App {
                 ));
                 compact(keys)
             }
-            Mode::Normal if self.on_suggestion().is_some() => hints(&[
-                ("enter", "add folder"),
-                ("tab", "edit path"),
-                ("esc", "back"),
-            ]),
+            Mode::Normal if self.on_suggestion().is_some() => {
+                hints(&[("enter", "add folder"), ("tab", "next"), ("esc", "back")])
+            }
             Mode::Normal if self.on_new_folder() => {
                 let mut keys = vec![("enter", "add folder")];
                 if let Some(does) = self.tab_does() {
@@ -15765,7 +15804,7 @@ impl App {
                     } else if let Some(text) = text {
                         self.status = match copy::to_clipboard(&text) {
                             Ok(()) => format!("copied {} characters", text.chars().count()),
-                            Err(e) => format!("not copied: {e:#}"),
+                            Err(e) => warning(format!("not copied: {e:#}")),
                         };
                     }
                 }
@@ -16002,12 +16041,29 @@ impl App {
                             self.add_suggestion(dir);
                             return Ok(false);
                         }
+                        // Tab walks the offers and wraps, as a shell's completion menu does.
                         KeyAction::Tab => {
-                            self.folder = Input::new(dir);
-                            self.select_row("new folder");
+                            self.step(1);
+                            if self.on_suggestion().is_none() {
+                                self.select_row("new folder");
+                                self.step(1);
+                            }
                             return Ok(false);
                         }
                         KeyAction::Cancel => {
+                            self.select_row("new folder");
+                            return Ok(false);
+                        }
+                        // A typed character takes the offer and continues the path from it.
+                        KeyAction::Unbound
+                            if matches!(code, KeyCode::Char(_))
+                                && !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                        {
+                            let descends = dir.ends_with('/') && code == KeyCode::Char('/');
+                            self.folder = Input::new(dir);
+                            if !descends {
+                                self.folder.key(code, mods);
+                            }
                             self.select_row("new folder");
                             return Ok(false);
                         }
@@ -16023,8 +16079,16 @@ impl App {
                     }
                     match action {
                         // An empty path has nothing to complete, so tab reaches the pane.
+                        // Tab grows the path; once it cannot, it steps into the offers below.
                         KeyAction::Tab if !self.folder.text.is_empty() => {
-                            self.status = self.folder.complete(&self.cwd).join("  ");
+                            let was = self.folder.text.clone();
+                            self.folder.complete(&self.cwd);
+                            if self.folder.text == was {
+                                self.step(1);
+                                if self.on_suggestion().is_none() {
+                                    self.select_row("new folder");
+                                }
+                            }
                             return Ok(false);
                         }
                         KeyAction::Enter => {
@@ -16587,6 +16651,16 @@ impl App {
             } else {
                 dim()
             });
+        let rules = if self.status.starts_with(WARNING) {
+            rules.title(Span::styled(
+                format!(" {} ", self.status),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else {
+            rules
+        };
         let text: Text<'static> = line.into();
         let input = Paragraph::new(text.clone())
             .wrap(Wrap { trim: false })
@@ -16819,6 +16893,17 @@ impl App {
             self.scroll = self.cursor;
         } else if height > 0 && self.cursor >= self.scroll + height {
             self.scroll = self.cursor + 1 - height;
+        }
+        // The folders under `+ add folder` are what its input chooses from, so they scroll
+        // into view with it; a list too short for all of them keeps the cursor.
+        if (self.on_new_folder() || self.on_suggestion().is_some())
+            && let Some(last) = self
+                .visible
+                .iter()
+                .rposition(|&i| matches!(self.rows[i].kind, Kind::Suggestion(..)))
+            && last >= self.scroll + height
+        {
+            self.scroll = (last + 1).saturating_sub(height).min(self.cursor);
         }
         let lines = self.row_lines(
             &self.rows,

@@ -3,9 +3,9 @@
 //! (Enter edits, Enter saves, Escape restores) into jobs.yaml while the file's comments and
 //! other settings stay; the session column picker changing the live table and jobs.yaml,
 //! with backspace restoring the defaults; adding a pinned folder, which `+ add folder`
-//! offers until it is open and offers again once ctrl+x closes it; tab listing
-//! folders on `+ add folder` and Enter twice creating a missing one; and a failed write or a validation error keeping the
-//! typed value on screen with the reason. Connectivity checks are not run: they probe the
+//! offers until it is open and offers again once ctrl+x closes it; tab walking the
+//! folders listed under `+ add folder` and Enter twice creating a missing one; and a failed
+//! write or a validation error keeping the typed value on screen with the reason. Connectivity checks are not run: they probe the
 //! machine's installed CLIs.
 use crate::dashboard::*;
 use std::{fs, os::unix::fs::PermissionsExt};
@@ -493,7 +493,11 @@ fn a_pinned_folder_is_offered_under_add_folder_until_it_is_open() {
     d.quit();
 }
 
-/// Make the fixture root, which holds jobs.yaml, read-only or writable again.
+/// The selected list line.
+fn selected(screen: &str) -> &str {
+    screen.lines().find(|l| l.starts_with('▌')).unwrap_or("")
+}
+
 #[test]
 fn add_folder_completes_like_a_shell_and_creates_a_missing_folder_after_asking() {
     let mut d = Dashboard::new("config_add_folder", &["claude"]);
@@ -504,13 +508,33 @@ fn add_folder_completes_like_a_shell_and_creates_a_missing_folder_after_asking()
     d.wait_text("+ add folder");
     select(&mut d, DOWN, "+ add folder", |l, _| l.contains("+ "));
 
-    // The first tab grows to the shared prefix and lists both folders.
+    // What is typed lists its folders under the input, and the first tab grows it to the
+    // shared prefix.
     d.typed("a");
-    d.press("tab", b"\t");
-    let screen = d.wait_text("alpha/  alps/");
+    let screen = d.wait_text("alps/");
     d.capture("listed");
-    assert!(screen.contains("+ alp"), "{screen}");
-    for _ in 0..3 {
+    let rows: Vec<&str> = screen.lines().collect();
+    let input = rows.iter().position(|l| l.starts_with('▌')).unwrap();
+    assert!(rows[input + 1].contains("alpha/"), "{screen}");
+    assert!(rows[input + 2].contains("alps/"), "{screen}");
+    d.press("tab", b"\t");
+    d.wait_for("the shared prefix", |s| selected(s).contains("+ alp"));
+
+    // Tab then walks the listed folders and wraps, as a shell's menu does.
+    for name in ["alpha/", "alps/", "alpha/", "alps/"] {
+        d.press("tab", b"\t");
+        d.wait_for(name, |s| selected(s).contains(name));
+    }
+    let screen = d.capture("walked");
+    assert!(
+        line(&screen, "enter add folder").contains("tab next"),
+        "{screen}"
+    );
+
+    // A typed slash takes the selected folder into the input.
+    d.typed("/");
+    d.wait_for("the taken folder", |s| selected(s).contains("+ alps/"));
+    for _ in 0..5 {
         d.press("backspace", BACKSPACE);
     }
 
@@ -518,8 +542,17 @@ fn add_folder_completes_like_a_shell_and_creates_a_missing_folder_after_asking()
     let made = d.project().join("made/deep");
     d.typed("made/deep");
     d.press("enter", b"\r");
-    d.wait_text("no such folder · enter creates");
+    // The question sits on the rule over the composer, and the hint bar keeps its keys.
+    let screen = d.wait_text("⚠ no such folder · enter creates");
     d.capture("asked");
+    assert!(
+        line(&screen, "no such folder").starts_with(" ⚠"),
+        "{screen}"
+    );
+    assert!(
+        line(&screen, "Add folder").contains("enter add folder"),
+        "{screen}"
+    );
     assert!(!made.exists());
     d.press("right", RIGHT);
     d.press("enter", b"\r");
@@ -533,6 +566,34 @@ fn add_folder_completes_like_a_shell_and_creates_a_missing_folder_after_asking()
     d.wait_file("state/open-folders.json", |t| t.contains(&real));
 }
 
+/// With more open folders than the list has rows, `+ add folder` is its bottom line; the
+/// folders it lists still come into view under it.
+#[test]
+fn add_folder_lists_its_folders_in_a_list_taller_than_the_screen() {
+    let mut d = Dashboard::new("config_add_folder_full", &["claude"]);
+    let open: Vec<_> = (0..30).map(|i| d.path(&format!("open/{i:02}"))).collect();
+    for dir in open
+        .iter()
+        .cloned()
+        .chain(["alpha", "alps"].map(|n| d.project().join(n)))
+    {
+        fs::create_dir_all(dir).unwrap();
+    }
+    d.open_folders(&open);
+    d.start();
+    select(&mut d, UP, "+ add folder", |l, _| l.contains("+ "));
+    d.typed("a");
+    let screen = d.wait_text("alps/");
+    d.capture("listed");
+    let rows: Vec<&str> = screen.lines().collect();
+    let input = rows.iter().position(|l| l.starts_with('▌')).unwrap();
+    assert!(rows[input].contains("+ a"), "{screen}");
+    assert!(rows[input + 1].contains("alpha/"), "{screen}");
+    assert!(rows[input + 2].contains("alps/"), "{screen}");
+    d.quit();
+}
+
+/// Make the fixture root, which holds jobs.yaml, read-only or writable again.
 fn writable(d: &Dashboard, yes: bool) {
     let mode = if yes { 0o755 } else { 0o555 };
     fs::set_permissions(d.root.path(), fs::Permissions::from_mode(mode)).unwrap();

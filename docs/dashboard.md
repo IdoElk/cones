@@ -38,7 +38,9 @@ a separate setting.
 | `ctrl+g` | Open Help. |
 
 Click a row to select it; click its pane or press Enter/Tab to focus the viewer. The footer
-shows actions for the current selection or draft, followed by navigation. Fullscreen viewers
+shows actions for the current selection or draft, followed by navigation. A problem, such as
+a failed action or a path that does not exist, is written in bold yellow on the rule over the
+composer and stays until the next key. Fullscreen viewers
 have a bottom strip with the session title, fleet counts, input requests and return keys.
 
 ## Menu
@@ -197,17 +199,20 @@ resumed run retains its row and original ledger outcome while displaying live va
 ### Add a folder
 
 `+ add folder` is the last session-list row. Type a path there; `~` expands and relative
-paths use the dashboard's cwd. Tab completes directories as a shell does: it grows the path to
-the longest shared prefix, lists the matches when more than one remains, and adds the `/` to
-a complete name such as `~` or `..`. Hidden names require a `.` prefix. Enter opens the
-folder and selects it, or its first session when it has any. A path that does not exist asks
-first; a second Enter creates it with its parents, any other key keeps typing. Other invalid
-paths retain the input. Escape clears it.
+paths use the dashboard's cwd. The directories the path could still become are listed under
+the row as it is typed, up to twelve; hidden names require a `.` prefix. Tab completes as a
+shell's menu does: it grows the path to the longest shared prefix and adds the `/` to a
+complete name such as `~` or `..`, and once the path cannot grow it walks the listed folders,
+wrapping at the end. On a listed folder Enter opens it, `/` or any other character takes it
+into the input to keep typing from, and Escape returns to the input. Enter on the input
+opens the typed folder and selects it, or its first session when it has any. A path that
+does not exist asks first; a second Enter creates it with its parents, any other key keeps
+typing. Other invalid paths retain the input. Escape clears it.
 
-Pinned folders, the `folders` setting in Config, are suggestions, not rows. The row offers
-every pin the list does not already hold open, filtered by path fragment. It does not build
-suggestions from past sessions. Down selects an offer, Enter opens it, and Tab copies it into
-the input. Aliases are deduplicated; a deleted directory asks to be created again when chosen.
+Pinned folders, the `folders` setting in Config, are suggestions, not rows. The row lists
+every pin the list does not already hold open, filtered by path fragment, after the typed
+path's own directories. It does not build suggestions from past sessions. Aliases are
+deduplicated; a deleted directory asks to be created again when chosen.
 
 An open folder stays in the list: when its last session leaves, it remains as an empty row
 until `ctrl+x` closes it or the directory is deleted. Every folder a session is listed in
