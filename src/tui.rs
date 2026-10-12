@@ -19891,6 +19891,7 @@ states:
                     socket: dir.path().join(format!("socket-{pid}")),
                     session,
                     what: "pi".into(),
+                    notes: None,
                 }
             })
             .collect();
@@ -19950,6 +19951,7 @@ states:
             socket: dir.path().join("unused"),
             session: report,
             what: "opencode".into(),
+            notes: None,
         };
         let mut rows = vec![row.clone()];
         merge_hosts(&mut rows, &[host.clone()]);
@@ -20006,6 +20008,7 @@ states:
             socket: dir.path().join("unused"),
             session,
             what: "claude".into(),
+            notes: None,
         });
         app.history.visible = true;
         app.history.first = false;

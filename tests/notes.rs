@@ -1,0 +1,258 @@
+//! `cones comms send` to harnesses with no delivery command of their own.
+//!
+//! Each client is `tests/fixtures/fake_reporter_client.mjs`, launched detached by `cones launch`
+//! under a disposable HOME. As pi or OpenCode it runs the reporter cones ships, so a note has to
+//! travel the real path: the host record, the reporter's inbox, the native extension call. The
+//! artifact is the fixture's own log of the user messages that call submitted.
+use serde_json::Value;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Output},
+    time::{Duration, Instant},
+};
+
+struct Fixture {
+    root: tempfile::TempDir,
+    jobs: PathBuf,
+    work: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        // Short prefix: the terminal host puts its socket under /tmp and macOS bounds the path.
+        let root = tempfile::Builder::new()
+            .prefix("cones-notes-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = root.path();
+        for dir in [
+            "state",
+            "claude",
+            "pi",
+            "data/opencode",
+            "work",
+            ".local/bin",
+        ] {
+            fs::create_dir_all(path.join(dir)).unwrap();
+        }
+        let client =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_reporter_client.mjs");
+        for name in ["pi", "opencode", "gemini"] {
+            std::os::unix::fs::symlink(&client, path.join(".local/bin").join(name)).unwrap();
+        }
+        let jobs = path.join("jobs.yaml");
+        // Only the harnesses under test are offered, so the machine's own clients of the
+        // others cannot reach these assertions.
+        fs::write(
+            &jobs,
+            "version: 4\ndefaults:\n  claude_enabled: false\n  codex_enabled: false\n  \
+             cursor_enabled: false\n  copilot_enabled: false\n  amp_enabled: false\n  \
+             droid_enabled: false\n  kimi_enabled: false\njobs: []\n",
+        )
+        .unwrap();
+        let work = path.join("work").canonicalize().unwrap();
+        Self { root, jobs, work }
+    }
+
+    fn cones(&self, reporter: &str, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_cones"))
+            .args(["--jobs", self.jobs.to_str().unwrap(), "--state-dir"])
+            .arg(self.root.path().join("state"))
+            .args(args)
+            .env("HOME", self.root.path())
+            .env("FAKE_REPORTER", reporter)
+            .env("CLAUDE_CONFIG_DIR", self.root.path().join("claude"))
+            .env("CODEX_HOME", self.root.path().join("missing-codex"))
+            .env("PI_CODING_AGENT_DIR", self.root.path().join("pi"))
+            .env("XDG_DATA_HOME", self.root.path().join("data"))
+            .env_remove("OPENCODE_DB")
+            .env_remove("OPENCODE_TUI_CONFIG")
+            .output()
+            .unwrap()
+    }
+
+    /// Launch one client and return its pid.
+    fn launch(&self, reporter: &str, harness: &str) -> u32 {
+        let work = self.work.to_str().unwrap();
+        let before = self.pids();
+        let out = self.cones(
+            reporter,
+            &["launch", "--dir", work, "--harness", harness, "a task"],
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+        let pid = self
+            .pids()
+            .into_iter()
+            .find(|pid| !before.contains(pid))
+            .expect("the launch left no host record");
+        wait_until("the client starting", || !self.log(pid).is_empty());
+        pid
+    }
+
+    /// The records of the terminal hosts this fixture owns.
+    fn records(&self) -> Vec<Value> {
+        fs::read_dir(self.root.path().join("state/terminals"))
+            .into_iter()
+            .flatten()
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                (path.extension()? == "json").then_some(())?;
+                serde_json::from_slice(&fs::read(path).ok()?).ok()
+            })
+            .collect()
+    }
+
+    fn pids(&self) -> Vec<u32> {
+        self.records()
+            .iter()
+            .filter_map(|record| record["session"]["pid"].as_u64())
+            .map(|pid| pid as u32)
+            .collect()
+    }
+
+    /// The id `cones ls` gives the client with this pid.
+    fn id(&self, pid: u32) -> String {
+        let work = self.work.to_str().unwrap();
+        let out = self.cones("ok", &["ls", "--dir", work, "--json"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|row| row["session"]["pid"] == pid)
+            .and_then(|row| row["session"]["session_id"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| panic!("cones ls has no row for pid {pid}"))
+    }
+
+    fn send(&self, id: &str, text: &str) -> Output {
+        let work = self.work.to_str().unwrap();
+        self.cones("ok", &["comms", "--dir", work, "send", id, text])
+    }
+
+    /// What the client logged: its own first line, then every user message it was handed.
+    fn log(&self, pid: u32) -> Vec<Value> {
+        fs::read_to_string(fixture_log(self.root.path(), pid))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// Notes and answers left in any reporter inbox of this fixture's hosts.
+    fn inbox_leftovers(&self) -> Vec<PathBuf> {
+        self.records()
+            .iter()
+            .filter_map(|record| fs::read_dir(record["notes"].as_str()?).ok())
+            .flat_map(|dir| dir.flatten().map(|e| e.path()))
+            .collect()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // A detached launch is meant to outlive its launcher, so the test has to end it.
+        for pid in self.pids() {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+    }
+}
+
+fn fixture_log(home: &Path, pid: u32) -> PathBuf {
+    home.join(format!("reporter-fixture/{pid}.jsonl"))
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).trim().to_owned()
+}
+
+fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if ready() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("{what} did not happen within 10s");
+}
+
+/// A note to a pi or OpenCode client cones launched reaches it as one user message through the
+/// harness's own extension call, addressed by the id the roster gives the client.
+#[test]
+fn a_note_reaches_an_owned_pi_and_opencode_as_a_native_user_message() {
+    let f = Fixture::new();
+    for harness in ["pi", "opencode"] {
+        let pid = f.launch("ok", harness);
+        let id = f.id(pid);
+        assert_eq!(id, format!("{harness}-{pid}"));
+        let out = f.send(&id, "rebase onto main");
+        assert!(out.status.success(), "{harness}: {}", stderr(&out));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("sent to {id} ({harness})\n")
+        );
+        let log = f.log(pid);
+        assert_eq!(log.len(), 2, "{harness} was handed {log:?}");
+        let text = match harness {
+            // Queued behind the assistant turn when one is running.
+            "pi" => {
+                assert_eq!(log[1]["options"]["deliverAs"], "steer");
+                &log[1]["text"]
+            }
+            _ => {
+                // The conversation the client shows, which its own first line names.
+                assert_eq!(log[1]["sessionID"], log[0]["session"]);
+                assert_eq!(log[1]["parts"][0]["type"], "text");
+                assert_eq!(log[1]["parts"].as_array().unwrap().len(), 1);
+                &log[1]["parts"][0]["text"]
+            }
+        };
+        let text = text.as_str().unwrap();
+        assert!(
+            text.starts_with("[another agent, not the owner] rebase onto main\nReply by appending"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(r#""from":"{harness}:{id}""#)),
+            "{text}"
+        );
+    }
+    assert_eq!(f.inbox_leftovers(), Vec::<PathBuf>::new());
+}
+
+/// A client that never loaded the reporter cannot take a note. The send fails and withdraws
+/// the note, so nothing is delivered later that was reported as lost.
+#[test]
+fn a_note_to_a_client_without_the_reporter_is_refused_and_withdrawn() {
+    let f = Fixture::new();
+    let pid = f.launch("deaf", "pi");
+    let out = f.send(&f.id(pid), "rebase onto main");
+    assert!(!out.status.success(), "the note was reported as sent");
+    assert!(
+        stderr(&out).contains("is not answering, so the note was withdrawn"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(f.log(pid).len(), 1, "{:?}", f.log(pid));
+    assert_eq!(f.inbox_leftovers(), Vec::<PathBuf>::new());
+}
+
+/// A terminal-only harness is refused with what its CLI offers instead, before anything is
+/// written anywhere.
+#[test]
+fn a_note_to_a_terminal_only_harness_is_refused_with_the_reason() {
+    let f = Fixture::new();
+    let pid = f.launch("ok", "gemini");
+    let out = f.send(&f.id(pid), "rebase onto main");
+    assert!(!out.status.success(), "the note was reported as sent");
+    let error = stderr(&out);
+    assert!(
+        error.contains(
+            "a note cannot reach gemini: it takes prompts at launch, headless with -p, or over \
+             ACP from the client that started it; nothing addresses a running interactive session"
+        ),
+        "{error}"
+    );
+    assert_eq!(f.log(pid).len(), 1, "{:?}", f.log(pid));
+}

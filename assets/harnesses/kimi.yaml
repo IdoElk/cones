@@ -26,6 +26,8 @@ operations:
       contains: [--prompt]
       error: "kimi does not support the required native command"
       description: "kimi: terminal launch; external sessions remain in their own terminals"
+  message:
+    unavailable: "it takes prompts at launch, headless with -p, or over ACP and its web server from their own clients; nothing addresses a running interactive session"
 execution:
   enforcement: unsupported
   result: unsupported

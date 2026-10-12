@@ -162,7 +162,8 @@ pub struct Operation {
     pub probe: Option<Probe>,
 }
 
-/// How a note reaches a live session: a native command, or the harness's own peer inbox.
+/// How a note reaches a live session: a native command, the harness's own peer inbox, or the
+/// reporter cones loads into a client it owns. A harness with none of them says why.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -170,6 +171,14 @@ pub enum Message {
     Command(Operation),
     PeerInbox {
         peer_inbox: PeerInbox,
+    },
+    /// The named call of the harness's extension API, made by the reporter in a cones terminal.
+    Reporter {
+        reporter: String,
+    },
+    /// Why no note can be delivered, shown with the refusal.
+    Unavailable {
+        unavailable: String,
     },
 }
 
@@ -1220,6 +1229,11 @@ impl HarnessSpec {
             !matches!(self.operations.message, Some(Message::PeerInbox { .. }))
                 || self.kind == HarnessKind::Claude,
             "a peer inbox requires the native Claude adapter"
+        );
+        ensure!(
+            !matches!(self.operations.message, Some(Message::Reporter { .. }))
+                || matches!(self.kind, HarnessKind::Pi | HarnessKind::Opencode),
+            "reporter delivery requires a harness cones loads a reporter into"
         );
         ensure!(
             !self.operations.rename

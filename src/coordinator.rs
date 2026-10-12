@@ -627,7 +627,7 @@ pub fn send(folder: &Folder, id: &str, text: &str, greet: bool) -> Result<String
         json!({"from": format!("{}:{id}", row.harness), "text": "<reply>"}),
     );
     let home = crate::harness::home_of(row, &folder.claude);
-    crate::harness::message(row, &home, &note)?;
+    crate::harness::message(row, &home, &folder.state, &note)?;
     if greet {
         greeted.push(id.to_owned());
         write_atomically(&greeted_path, &serde_json::to_string(&greeted)?)?;

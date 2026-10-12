@@ -23,6 +23,8 @@ operations:
       contains: [--help]
       error: "amp does not support the required native command"
       description: "amp: terminal launch; external sessions remain in their own terminals"
+  message:
+    unavailable: "it takes prompts at launch or by continuing a thread in a new client; nothing addresses a running interactive session"
 execution:
   enforcement: unsupported
   result: unsupported

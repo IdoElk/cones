@@ -59,6 +59,8 @@ operations:
       description: "pi: native session forks"
   resume:
     args: [--session, "{transcript}"]
+  message:
+    reporter: sendUserMessage
 execution:
   enforcement: unsupported
 viewer:

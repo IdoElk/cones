@@ -99,7 +99,8 @@ resume. Native handlers sequence multi-step operations and stop on failure.
 | `operations.stop` | Native CLI stop preserving conversation history. |
 
 Owned-terminal stop uses the host separately. `operations.message` supplies native delivery,
-as a command or, for Claude only, `peer_inbox: {protocols: [...]}`
+as a command, for Claude only `peer_inbox: {protocols: [...]}`, or for pi and OpenCode
+`reporter: <extension call>`; `unavailable: <reason>` states why a harness has none
 ([message delivery](harness.md#message-delivery)).
 `rename: true` enables a registered native handoff, currently Claude/Codex; YAML supplies no
 file-writing program.

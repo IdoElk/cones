@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -67,7 +67,7 @@ test("Pi reports native dialogs, nested waits, switches, failure and reload with
   process.env.CONES_PI_REPORT = path;
   const handlers = new Map();
   let tick, failed = false, idle = true, id = "aaaaaaaa-1111-4111-8111-111111111111";
-  t.mock.method(globalThis, "setInterval", (fn) => { tick = fn; return { unref() {} }; });
+  t.mock.method(globalThis, "setInterval", (fn, ms) => { if (ms === 1000) tick = fn; return { unref() {} }; });
   t.mock.method(globalThis, "clearInterval", () => {});
   const pi = { on: (event, handler) => handlers.set(event, handler) };
   const ctx = {
@@ -119,6 +119,96 @@ test("Pi reports native dialogs, nested waits, switches, failure and reload with
     handlers.get("session_shutdown")?.();
     if (original === undefined) delete process.env.CONES_PI_REPORT;
     else process.env.CONES_PI_REPORT = original;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// A note is `<name>.json` in the directory beside the report; the reporter answers `<name>.done`.
+const note = (directory, name, value) => {
+  mkdirSync(join(directory, "notes"), { recursive: true });
+  writeFileSync(join(directory, "notes", `${name}.json`), typeof value === "string" ? value : JSON.stringify(value));
+};
+const answer = (directory, name) => JSON.parse(readFileSync(join(directory, "notes", `${name}.done`), "utf8"));
+
+test("Pi submits a note through sendUserMessage and answers every note", async (t) => {
+  const { default: report } = await import("../assets/harnesses/pi-report.mjs");
+  const directory = mkdtempSync(join(tmpdir(), "cones-pi-notes-test-"));
+  const original = process.env.CONES_PI_REPORT;
+  process.env.CONES_PI_REPORT = join(directory, "session.json");
+  const handlers = new Map(), sent = [];
+  let deliver, refuse = false;
+  const cleared = [];
+  t.mock.method(globalThis, "setInterval", (fn, ms) => { if (ms === 250) deliver = fn; return { ms, unref() {} }; });
+  t.mock.method(globalThis, "clearInterval", (timer) => cleared.push(timer?.ms));
+  const pi = {
+    on: (event, handler) => handlers.set(event, handler),
+    sendUserMessage: (text, options) => { if (refuse) throw Error("extension is stale"); sent.push([text, options]); },
+  };
+  const ctx = { cwd: directory, sessionManager: { getSessionId: () => "here", getSessionFile: () => undefined }, isIdle: () => false };
+  try {
+    report(pi);
+    handlers.get("session_start")({}, ctx);
+    note(directory, "a", { text: "rebase" });
+    note(directory, "c", "{");
+    writeFileSync(join(directory, "notes", "d.tmp"), "unfinished");
+    deliver();
+    assert.deepEqual(sent, [["rebase", { deliverAs: "steer" }]]);
+    assert.deepEqual(answer(directory, "a"), {});
+    assert.ok(answer(directory, "c").error, "an unreadable note is answered, not retried");
+    assert.deepEqual(readdirSync(join(directory, "notes")).sort(),
+      ["a.done", "c.done", "d.tmp"], "a note is consumed once and a partial write is left alone");
+    deliver();
+    assert.equal(sent.length, 1, "a delivered note is not delivered again");
+    refuse = true;
+    note(directory, "e", { text: "lost" });
+    deliver();
+    assert.match(answer(directory, "e").error, /extension is stale/, "a native refusal reaches the sender");
+    handlers.get("session_shutdown")();
+    assert.ok(cleared.includes(250), "a replaced session stops taking notes");
+  } finally {
+    if (original === undefined) delete process.env.CONES_PI_REPORT;
+    else process.env.CONES_PI_REPORT = original;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode submits a note to the shown session through prompt_async and reports a refusal", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "cones-opencode-notes-test-"));
+  let tick, rejection;
+  const sent = [];
+  t.mock.method(globalThis, "setInterval", (fn) => { tick = fn; return 123; });
+  t.mock.method(globalThis, "clearInterval", () => {});
+  const api = {
+    state: { ready: false },
+    route: { current: { name: "session", params: { sessionID: "ses_here" } } },
+    lifecycle: { onDispose: () => {} },
+    client: { session: { promptAsync: async (input) => { sent.push(input); return rejection ? { error: rejection } : {}; } } },
+  };
+  const settled = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    await plugin.tui(api, { path: join(directory, "session.json") });
+    note(directory, "a", { text: "rebase" });
+    note(directory, "b", { text: "then push" });
+    tick(); tick();
+    await settled();
+    assert.deepEqual(sent.map((input) => [input.sessionID, input.parts]).sort(), [
+      ["ses_here", [{ type: "text", text: "rebase" }]],
+      ["ses_here", [{ type: "text", text: "then push" }]],
+    ], "overlapping passes deliver each note once");
+    assert.deepEqual(answer(directory, "a"), {});
+    assert.deepEqual(answer(directory, "b"), {});
+    rejection = { name: "NotFoundError" };
+    note(directory, "c", { text: "refused" });
+    tick();
+    await settled();
+    assert.match(answer(directory, "c").error, /NotFoundError/);
+    api.route.current = { name: "home" };
+    note(directory, "d", { text: "nobody is there" });
+    tick();
+    await settled();
+    assert.match(answer(directory, "d").error, /shows no session/);
+    assert.equal(sent.length, 3);
+  } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });

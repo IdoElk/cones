@@ -25,6 +25,8 @@ operations:
       contains: [--interactive]
       error: "copilot does not support the required native command"
       description: "copilot: terminal launch; external sessions remain in their own terminals"
+  message:
+    unavailable: "it takes prompts at launch or headless with -p; nothing addresses a running interactive session"
 execution:
   enforcement: unsupported
   result: unsupported

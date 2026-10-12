@@ -106,6 +106,7 @@ CONES_STRESS_SECONDS=3600 CONES_STRESS_INTERVAL_MS=1000 scripts/check stress
 python3 scripts/check-opencode.py target/debug/cones /absolute/path/to/opencode
 python3 scripts/check-terminals.py target/debug/cones
 python3 scripts/check-owned-harnesses.py target/debug/cones /absolute/path/to/claude /absolute/path/to/pi
+python3 scripts/check-notes.py target/debug/cones /absolute/path/to/pi /absolute/path/to/opencode
 python3 scripts/check-rename.py
 python3 scripts/check-stop.py target/debug/cones /absolute/path/to/claude
 ```
