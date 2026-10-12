@@ -115,7 +115,8 @@ enum Action {
         #[arg(long, value_enum, default_value = "manual")]
         trigger: Trigger,
     },
-    /// Start a harness session in a folder, the way the dashboard's composer does.
+    /// Start a harness session in a folder, the way the dashboard's composer does. It runs
+    /// detached and needs no terminal; its id is printed once the harness reports it.
     Launch {
         /// The first instruction. Omitted, the session opens waiting for input.
         prompt: Option<String>,
@@ -574,33 +575,22 @@ fn execute(cli: Cli) -> Result<i32> {
             }
             // A detached launch outlives this shell and prints one id for the other
             // commands. Which kind of id that is depends on the harness; see docs/cli.md.
-            if cones::launch::detaches(kind) {
-                let started = cones::launch::detached(
-                    &state,
-                    &claude,
-                    kind,
-                    &dir,
-                    prompt.trim(),
-                    &policy,
-                    start,
-                )?;
-                eprintln!(
-                    "{} running detached, {}",
-                    started.harness,
-                    started.identity.describe()
-                );
-                println!("{}", started.id);
-                return Ok(0);
-            }
-            // Codex is a client of its own daemon and reports no thread at launch, so it
-            // keeps the old behaviour: this terminal, and no id to hand anyone.
-            let harness::Start::Foreground(mut command) = start else {
-                bail!("{kind} has neither a detached launch nor a terminal client")
-            };
-            command = harness::restore_stdin_prompt(command)?;
-            attach_real_tty(&mut command);
-            let error = command.exec();
-            bail!("{kind} failed to start: {error}")
+            let started = cones::launch::detached(
+                &state,
+                &claude,
+                kind,
+                &dir,
+                prompt.trim(),
+                &policy,
+                start,
+            )?;
+            eprintln!(
+                "{} running detached, {}",
+                started.harness,
+                started.identity.describe()
+            );
+            println!("{}", started.id);
+            Ok(0)
         }
         Action::Ls {
             job,

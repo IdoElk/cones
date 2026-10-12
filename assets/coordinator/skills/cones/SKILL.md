@@ -21,7 +21,10 @@ harnesses' own records, so you can use it to reach beyond your own session.
    need not be on it. Replies come back to that folder: `cones comms --dir PATH wait` blocks
    until one lands, `mail` prints it, and `mail --ack N` marks it handled.
 3. **Start new work.** Launch a session in any folder on any enabled harness, the way the
-   owner's dashboard does, and get its id back. `cones launch --dir PATH PROMPT`.
+   owner's dashboard does, and get its id back. `cones launch --dir PATH --harness NAME PROMPT`
+   runs detached, needs no terminal and prints the id on stdout; give it the whole task as
+   the prompt. Never start a harness's own CLI instead, such as `codex exec` or `claude -p`:
+   the owner cannot open that session from the dashboard. If launch fails, report the error.
 4. **Hand off coordination.** For a task you hold, run your own workers with the dispatch
    skill: `cones skill dispatch`. For a folder whose agents came from elsewhere, start its
    coordinator: `cones coordinator --dir PATH start`, which runs the `start-coordinator` skill in

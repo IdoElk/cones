@@ -6,10 +6,13 @@
 //! launchable harness is a terminal client, so its launch is handed to the same detached
 //! terminal host the dashboard uses, which calls `setsid` and outlives its launcher.
 //!
-//! Nothing in this module matches a launch by prompt, folder or start time. Two identical
-//! prompts launched into one folder at the same moment are told apart by a key the launch
-//! itself owns: Claude's returned background id, or the pid the host reports for the native
-//! client it just spawned. A launch cones cannot name is reported as unnamed, never guessed.
+//! Two identical prompts launched into one folder at the same moment are told apart by a key
+//! the launch itself owns: Claude's returned background id, or the pid the host reports for
+//! the native client it just spawned. Codex gives a launch no such key: its daemon makes the
+//! thread and tells the client nothing a second process can read. Its thread is therefore
+//! named the way the dashboard names it, by folder, start time and typed prompt, and only
+//! when exactly one thread fits. A launch cones cannot name is reported as unnamed, never
+//! guessed.
 //!
 //! Permissions, model choice and the conversation stay with the harness. cones adds a
 //! lifetime and a name for it.
@@ -70,16 +73,6 @@ const SETTLE: Duration = Duration::from_secs(20);
 const DISCOVER: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(150);
 
-/// Whether this harness's launch leaves work running past the launching terminal.
-/// Codex is launched as a remote client of its own daemon and reports no thread id, so a
-/// launch could be detached or named but not both; see `docs/harness.md`.
-pub fn detaches(kind: HarnessKind) -> bool {
-    matches!(
-        harness::spec(kind).launch.as_ref().map(|l| l.handler),
-        Some(LaunchHandler::ClaudeBackground | LaunchHandler::Terminal)
-    )
-}
-
 /// Start `kind` in `dir` and return the exact identity the public commands take for it.
 /// `start` is the command `harness::start` compiled, so the flags, provider and native home
 /// are the ones the dashboard's composer would have used.
@@ -93,6 +86,7 @@ pub fn detached(
     start: harness::Start,
 ) -> Result<Launched> {
     let owned = format!("{kind}:start:{}", uuid::Uuid::new_v4());
+    let since = chrono::Utc::now();
     // Written before anything is started. A launcher killed between here and the reply
     // leaves this line behind, so the work can be found and a retry is a duplicate someone
     // can see rather than an untracked second agent in the same folder.
@@ -111,6 +105,17 @@ pub fn detached(
         }
         (Some(LaunchHandler::Terminal), harness::Start::Foreground(command)) => {
             hosted(state, claude, policy, kind, dir, prompt, &owned, command)
+        }
+        // With no prompt there is no thread to wait for: the daemon makes one on the first
+        // turn, so the waiting client is named like any other hosted one.
+        (Some(LaunchHandler::CodexRemote), harness::Start::Foreground(command))
+            if prompt.is_empty() =>
+        {
+            hosted(state, claude, policy, kind, dir, prompt, &owned, command)
+        }
+        (Some(LaunchHandler::CodexRemote), harness::Start::Foreground(command)) => {
+            host(state, kind, dir, prompt, &owned, command)
+                .and_then(|record| thread(state, claude, policy, kind, dir, prompt, since, &record))
         }
         _ => bail!("{kind} has no detached launch"),
     };
@@ -202,21 +207,7 @@ fn hosted(
     owned: &str,
     command: std::process::Command,
 ) -> Result<Launched> {
-    // ponytail: the launching terminal's size, or a plain default when there is none. The
-    // host resizes on attach, so this only decides what the client renders before anyone looks.
-    let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((120, 40));
-    let record = terminal_host::launch(
-        &std::env::current_exe().context("locating the cones executable")?,
-        state,
-        &command,
-        crate::tui::placeholder(kind, owned, dir, prompt),
-        prompt,
-        rows,
-        cols,
-        Colors::default(),
-        false,
-    )
-    .with_context(|| format!("host {kind}"))?;
+    let record = host(state, kind, dir, prompt, owned, command)?;
     // Past here the native client is running. Failing to name it is a reporting failure and
     // never a reason to stop it: the host record names it for the dashboard either way.
     let pid = record.session.pid;
@@ -254,6 +245,110 @@ fn hosted(
         id: row.session_id,
         harness: name,
         pid,
+    })
+}
+
+/// Give the client a detached terminal host and return its record.
+fn host(
+    state: &Path,
+    kind: HarnessKind,
+    dir: &Path,
+    prompt: &str,
+    owned: &str,
+    command: std::process::Command,
+) -> Result<terminal_host::Record> {
+    // ponytail: the launching terminal's size, or a plain default when there is none. The
+    // host resizes on attach, so this only decides what the client renders before anyone looks.
+    let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((120, 40));
+    terminal_host::launch(
+        &std::env::current_exe().context("locating the cones executable")?,
+        state,
+        &command,
+        crate::tui::placeholder(kind, owned, dir, prompt),
+        prompt,
+        rows,
+        cols,
+        Colors::default(),
+        false,
+    )
+    .with_context(|| format!("host {kind}"))
+}
+
+/// Name the thread a hosted Codex client just opened, then let the client go. The client's
+/// pid names nothing that lasts: the roster replaces its row with the daemon's thread as soon
+/// as there is one. The thread is the one in this folder, started after this launch and opened with this prompt,
+/// which is the dashboard's rule; two that fit are refused rather than chosen between.
+#[allow(clippy::too_many_arguments)]
+fn thread(
+    state: &Path,
+    claude: &Path,
+    policy: &Policy,
+    kind: HarnessKind,
+    dir: &Path,
+    prompt: &str,
+    since: chrono::DateTime<chrono::Utc>,
+    record: &terminal_host::Record,
+) -> Result<Launched> {
+    let name = kind.to_string();
+    let typed = crate::fleet::headline(prompt);
+    let pid = record.session.pid;
+    let found = settle(SETTLE, claude, state, policy, |s| {
+        s.harness == name
+            && s.kind == record.session.kind
+            && s.cwd == dir
+            && s.state != "-"
+            && s.started.is_some_and(|at| at >= since)
+            && s.transcript_path
+                .as_deref()
+                .and_then(crate::codex::prompt_of)
+                == typed
+    })?;
+    ensure!(
+        found.len() < 2,
+        "{kind} reported {} new threads in {} with this prompt; cones will not choose between \
+         them. All are running: `cones ls --dir {}` lists them",
+        found.len(),
+        dir.display(),
+        dir.display()
+    );
+    let row = found.into_iter().next().with_context(|| {
+        format!(
+            "{kind} was hosted with pid {} but reported no thread for this prompt in {}s. It \
+             is still running and may be waiting on a trust or sign-in screen: open it from \
+             the dashboard, check `cones ls --dir {}` before launching it again, and see {}",
+            pid.map_or_else(|| "none".into(), |p| p.to_string()),
+            SETTLE.as_secs(),
+            dir.display(),
+            state.join("launches.jsonl").display()
+        )
+    })?;
+    // The daemon drops its lock minutes after a thread goes quiet. The saved record keeps the
+    // thread a row after that, as it does for one the dashboard launched.
+    if let (Some(started), Some(rollout)) = (row.started, &row.transcript_path) {
+        let saved = crate::codex::remember(
+            state,
+            crate::codex::Thread {
+                id: row.session_id.clone(),
+                cwd: row.cwd.clone(),
+                started,
+                rollout: rollout.clone(),
+            },
+        );
+        if let Err(error) = saved {
+            eprintln!("cones: could not save thread {}: {error}", row.session_id);
+        }
+    }
+    // The daemon runs the thread, so the client has done its work once the first turn is
+    // reported. Left hosted it would be a second row for the same agent; the dashboard joins
+    // the thread with a client of its own.
+    if let Err(error) = terminal_host::stop(record) {
+        eprintln!("cones: the launching client is still hosted: {error}");
+    }
+    Ok(Launched {
+        id: row.session_id,
+        identity: Identity::Native,
+        harness: name,
+        pid: None,
     })
 }
 

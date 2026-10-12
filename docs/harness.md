@@ -347,26 +347,33 @@ later refreshes. Closing an unidentified client may leave no saved row.
 
 ### Detached launch
 
-[`cones launch`](cli.md#starting-a-session) uses Claude's daemon or the composer's persistent
-host. Codex stays in the launching terminal and prints no id; detached launch is unsupported.
+[`cones launch`](cli.md#starting-a-session) uses the harness's daemon or the composer's
+persistent host.
 
 | Harness | Returned identity | Lifetime |
 | --- | --- | --- |
 | Claude | Full native session id resolved from the returned background id. | Native conversation. |
+| Codex, with a prompt | Thread id, once its first turn is reported. | Daemon thread; the launching client is stopped. |
+| Codex, no prompt | `codex-<pid>` until the first turn makes a thread. | Hosted client lifetime. |
 | OpenCode | `opencode-<pid>`, or the stored host id while discovery reports none. | Hosted client lifetime. |
 | pi | `pi-<pid>`, or the stored host id while discovery reports none. | Hosted client lifetime. |
 | Experimental launchers | Process row, or stored host id when discovery supplies none. | Hosted client lifetime. |
 
 Detached identity uses the owned background id or child PID, never prompt/cwd matching.
-Claude naming waits up to 20 seconds. Hosted launches wait up to five seconds for discovery,
+Codex is the exception, because its daemon reports no launch key: its thread is the one new
+thread matching folder, start and prompt, and two that match are refused, so identical
+concurrent prompts in one folder are not told apart. Claude and Codex naming wait up to 20
+seconds; a Codex client stuck on a trust or sign-in screen reports no thread and stays hosted.
+Hosted launches wait up to five seconds for discovery,
 then up to 20 for a stored host identity if needed. An unnamed launch fails without stopping
 the session. Input waits remain native and require user action.
 
 CLI stop resolves a host's saved id or current discovered id through harness and live client
-PID. Ambiguous matches are refused. Codex lacks supported per-thread detached launch/stop;
+PID. Ambiguous matches are refused. Codex lacks supported per-thread stop;
 daemon stop affects all its threads, and history operations do not substitute for stopping.
 
-Detached Claude launch was verified with 2.1.278. The detached CLI workflow remains unverified
+Detached Claude launch was verified with 2.1.278, and Codex with 0.162.1: the thread finished
+its turn and took a later note with no client attached. The detached CLI workflow remains unverified
 for hosted detach/rejoin through the dashboard, detached resume, OpenCode identity and
 experimental launchers. Their composer checks do not establish detached CLI support.
 

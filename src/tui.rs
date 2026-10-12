@@ -13985,9 +13985,9 @@ impl App {
                             "operation_id": self.input_operation.as_ref().map(|(o, _)| &o.id),
                         })
                     });
-                    self.status = format!(
+                    self.status = warning(format!(
                         "{harness} runs in its own terminal and cannot be joined from here"
-                    );
+                    ));
                     return Ok(());
                 }
                 let spec = harness::by_name(&harness).context("unknown session harness")?;

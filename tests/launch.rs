@@ -27,7 +27,7 @@ impl Fixture {
             fs::create_dir_all(path.join(dir)).unwrap();
         }
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_harness.py");
-        for name in ["claude", "pi"] {
+        for name in ["claude", "pi", "codex"] {
             let target = path.join(".local/bin").join(name);
             std::os::unix::fs::symlink(&fixture, &target).unwrap();
         }
@@ -43,6 +43,32 @@ impl Fixture {
         .unwrap();
         let work = path.join("work").canonicalize().unwrap();
         Self { root, jobs, work }
+    }
+
+    /// The same fixture offering Codex alone, with a native home of its own. That home makes
+    /// cones scan the machine's Codex clients too, so these tests select rows by the ids and
+    /// the folder they created.
+    fn codex() -> Self {
+        let f = Self::new();
+        fs::create_dir_all(f.codex_home()).unwrap();
+        let offered = fs::read_to_string(&f.jobs)
+            .unwrap()
+            .replace("codex_enabled: false", "claude_enabled: false\n  pi_enabled: false");
+        fs::write(&f.jobs, offered).unwrap();
+        f
+    }
+
+    fn codex_home(&self) -> PathBuf {
+        self.path().join("codex")
+    }
+
+    /// The threads the fixture's daemon made, in the order it made them.
+    fn codex_threads(&self) -> Vec<String> {
+        fs::read_to_string(self.codex_home().join("fixture-threads"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn path(&self) -> &Path {
@@ -66,7 +92,7 @@ impl Fixture {
             .env("FAKE_LAUNCH", mode)
             .env("CLAUDE_CONFIG_DIR", self.path().join("claude"))
             .env("PI_CODING_AGENT_DIR", self.path().join("pi"))
-            .env("CODEX_HOME", self.path().join("missing-codex"))
+            .env("CODEX_HOME", self.codex_home())
             .env_remove("OPENCODE_DB")
             .env_remove("OPENCODE_TUI_CONFIG")
             .output()
@@ -142,7 +168,17 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         // A detached launch is meant to outlive its launcher, so the test has to end it.
-        for pid in self.hosted_pids().into_iter().chain(self.background_pids()) {
+        let daemon = fs::read(self.codex_home().join("app-server-daemon/app-server.pid"))
+            .ok()
+            .and_then(|pid| serde_json::from_slice::<Value>(&pid).ok())
+            .and_then(|pid| pid["pid"].as_u64())
+            .map(|pid| pid as u32);
+        for pid in self
+            .hosted_pids()
+            .into_iter()
+            .chain(self.background_pids())
+            .chain(daemon)
+        {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         }
     }
@@ -365,6 +401,51 @@ fn two_hosted_launches_in_one_folder_stay_two_sessions() {
     for id in [&first, &second] {
         assert!(carried.contains(id), "cones ls lost {id}: {carried:?}");
     }
+}
+
+#[test]
+fn a_codex_launch_returns_the_thread_its_daemon_made_and_leaves_no_client_behind() {
+    let f = Fixture::codex();
+    let out = f.launch("ok", "codex", "rebase onto main\nand keep the tests green");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = stdout(&out);
+    assert_eq!(f.codex_threads(), [id.clone()], "the thread the daemon made");
+    assert!(stderr(&out).contains("native session id"), "{}", stderr(&out));
+
+    // The daemon holds the thread, so the launching client is gone and the folder has one
+    // row for one agent, which the dashboard joins like any other daemon thread.
+    let rows = f.rows();
+    let codex: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["session"]["harness"] == "codex")
+        .collect();
+    assert_eq!(codex.len(), 1, "{codex:?}");
+    assert_eq!(codex[0]["session"]["session_id"], id.as_str());
+    assert_eq!(codex[0]["session"]["kind"], "daemon");
+    assert_eq!(codex[0]["session"]["title"], "rebase onto main");
+    assert_eq!(f.hosted_pids(), [] as [u32; 0], "the client was left hosted");
+
+    let recovery = f.recovery();
+    assert_eq!(recovery[0]["event"], "launch.submitted");
+    assert_eq!(recovery[1]["event"], "launch.identified");
+    assert_eq!(recovery[1]["data"]["session_id"], id.as_str());
+}
+
+#[test]
+fn two_codex_threads_for_one_prompt_are_refused_rather_than_chosen_between() {
+    let f = Fixture::codex();
+    let out = f.launch("twice", "codex", "same words");
+    assert!(!out.status.success());
+    assert_eq!(stdout(&out), "", "an id was guessed");
+    assert!(stderr(&out).contains("will not choose"), "{}", stderr(&out));
+    assert_eq!(f.codex_threads().len(), 2);
+    // Unnamed is a reporting failure: the client is still hosted and still running.
+    let hosted = f.hosted_pids();
+    assert_eq!(hosted.len(), 1, "{hosted:?}");
+    assert!(alive(hosted[0]));
+    let recovery = f.recovery();
+    assert_eq!(recovery[1]["event"], "launch.unnamed");
+    assert!(recovery[1]["data"]["session_id"].is_null());
 }
 
 #[test]
