@@ -754,7 +754,11 @@ impl Cache {
             Native::Codex => codex_columns_priced(&e.transcript, catalog.as_deref())?,
             Native::Pi => pi_columns(&e.transcript, catalog.as_deref())?,
             Native::Opencode => unreachable!("database hydration handled above"),
-            Native::External(_) => anyhow::bail!("native history unavailable for this harness"),
+            // The archive is read for its text; these harnesses have no usage adapter.
+            Native::External(_) => Columns {
+                title: e.title.clone(),
+                ..Columns::default()
+            },
         };
         if status_stamp.is_some() {
             let mut bytes = Vec::new();
@@ -866,7 +870,7 @@ fn children(dir: &Path) -> Result<Vec<fs::DirEntry>> {
 }
 
 fn discover(source: &Source) -> Result<Vec<(PathBuf, bool)>> {
-    if source.harness.terminal_only() {
+    if !harness::spec(source.harness).transcript.available {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
@@ -940,7 +944,7 @@ fn metadata(
     let (head, identity) = loop {
         let bytes = window(&mut file, 0, size, stats)?;
         let head: Vec<Value> = events(&bytes, true, size == len).collect();
-        let identity = identity(source.harness, path, &head);
+        let identity = identity(source, path, &head);
         if identity.is_some() || size >= len || size >= MAX_WINDOW {
             break (head, identity);
         }
@@ -986,7 +990,7 @@ fn metadata(
             .and_then(fleet::headline)
             .or_else(|| user_title(user, &head)),
         Native::Opencode => unreachable!("SQLite metadata uses its native reader"),
-        Native::External(_) => None,
+        Native::External(_) => user_title(user, &head),
     };
     // Claude writes its working folder on every line, so the last one follows EnterWorktree.
     let moved_to = matches!(definition.transcript.handler, Native::Claude)
@@ -1014,8 +1018,8 @@ fn metadata(
 
 type Identity = (String, PathBuf, Option<DateTime<Utc>>);
 
-fn identity(harness: HarnessKind, path: &Path, events: &[Value]) -> Option<Identity> {
-    match harness::spec(harness).transcript.handler {
+fn identity(source: &Source, path: &Path, events: &[Value]) -> Option<Identity> {
+    match harness::spec(source.harness).transcript.handler {
         Native::Claude => {
             let id = path.file_stem()?.to_str()?;
             uuid::Uuid::parse_str(id).ok()?;
@@ -1033,7 +1037,8 @@ fn identity(harness: HarnessKind, path: &Path, events: &[Value]) -> Option<Ident
             .iter()
             .find_map(|v| pi::meta(&v.to_string()))
             .map(|m| (m.session_id, m.cwd, Some(m.started))),
-        Native::Opencode | Native::External(_) => None,
+        Native::External(kind) => crate::agents::meta(kind, &source.home, path, events),
+        Native::Opencode => None,
     }
 }
 

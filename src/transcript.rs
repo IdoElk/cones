@@ -1056,6 +1056,19 @@ fn tools(harness: &str, v: &Value) -> Vec<Tool> {
                 .filter_map(|part| summary(&part["name"], &part["arguments"]))
                 .collect()
         }
+        "cursor-agent" if v["role"] == "assistant" => v["message"]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|part| part["type"] == "tool_use")
+            .filter_map(|part| summary(&part["name"], &part["input"]))
+            .collect(),
+        "copilot" if v["type"] == "assistant.message" => v["data"]["toolRequests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|call| summary(&call["name"], &call["arguments"]))
+            .collect(),
         "codex" if v["type"] == "response_item" => {
             let p = &v["payload"];
             match p["type"].as_str() {

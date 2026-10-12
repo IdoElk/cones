@@ -22,6 +22,7 @@ mod history_api;
 mod launch;
 mod opencode;
 mod runner;
+mod show_screen;
 mod stop;
 mod terminals;
 mod transcript;

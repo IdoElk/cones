@@ -1823,7 +1823,11 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(adapter(kind).is_err());
-            assert!(!spec(kind).transcript.available);
+            assert_eq!(
+                spec(kind).transcript.available,
+                matches!(kind, HarnessKind::Copilot | HarnessKind::Cursor),
+                "{kind}: only verified archives are read"
+            );
             assert!(spec(kind).operations.resume.is_none());
             assert!(spec(kind).operations.fork.is_none());
         }

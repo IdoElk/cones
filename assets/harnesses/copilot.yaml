@@ -8,11 +8,21 @@ discovery:
   process: copilot
   exclude_subcommands: ["--help", "-h", "--version", "login", "logout", "help", "version", "update"]
 transcript:
-  available: false
-  roots: []
+  roots:
+    - {path: session-state, depth: 1, archived: false}
   messages:
-    user: {sources: []}
-    assistant: {sources: []}
+    user:
+      id: /id
+      sources:
+        - when: {/type: user.message}
+          path: /data/content
+          shape: string
+    assistant:
+      id: /data/messageId
+      sources:
+        - when: {/type: assistant.message}
+          path: /data/content
+          shape: string
 operations:
   launch:
     identity: client_pid

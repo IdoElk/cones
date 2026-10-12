@@ -316,7 +316,8 @@ fn every_registered_harness_inherits_fallback_precedence_coverage_and_cache_refr
     let state = dir.path().join("prices");
     let missing = dir.path().join("missing");
     for &kind in harness::known() {
-        if !harness::spec(kind).transcript.available {
+        // A harness with a readable archive and no usage adapter has nothing to price.
+        if kind.terminal_only() {
             continue;
         }
         let fixture = Fixture::new(dir.path(), kind);

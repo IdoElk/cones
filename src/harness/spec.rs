@@ -1063,8 +1063,9 @@ impl HarnessSpec {
             );
             relative(&siblings.marker)?;
         }
+        // A harness listed by its process may still keep conversations cones can read.
         ensure!(
-            self.transcript.available != self.kind.terminal_only(),
+            self.transcript.available || self.kind.terminal_only(),
             "native readers require transcript definitions"
         );
         ensure!(

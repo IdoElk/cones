@@ -72,6 +72,9 @@ pub(crate) enum Request {
     Scroll(i32),
     Update(Box<Session>),
     Stop { id: String },
+    /// Read the screen without attaching: it works beside an attached dashboard and changes
+    /// nothing the client or that dashboard can observe.
+    Text { id: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -80,6 +83,20 @@ pub(crate) enum Reply {
     Screen(Box<Snapshot>),
     Error(String),
     Stopped,
+    Text(Box<Text>),
+}
+
+/// What the terminal shows as plain text. This is a screen, not a conversation: a client
+/// that repaints leaves whatever it last drew, and nothing here says who wrote which line.
+#[derive(Serialize, Deserialize)]
+pub struct Text {
+    pub rows: u16,
+    pub cols: u16,
+    /// The client is on its alternate screen, which keeps no scrollback.
+    pub alternate: bool,
+    /// Lines that scrolled off the top, oldest first.
+    pub scrollback: Vec<String>,
+    pub screen: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -217,6 +234,44 @@ pub(crate) fn stop(record: &Record) -> io::Result<()> {
         Reply::Stopped => Ok(()),
         Reply::Error(error) => Err(io::Error::other(error)),
         _ => Err(io::Error::other("terminal host did not confirm stop")),
+    }
+}
+
+/// The screen and scrollback the host holds for `record`. Opens no viewer and sends no input.
+pub(crate) fn text(record: &Record) -> io::Result<Text> {
+    let mut stream = UnixStream::connect(&record.socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(1)))?;
+    stream.write_all(&frame(&Request::Text {
+        id: record.id.clone(),
+    })?)?;
+    match read_one::<Reply>(&mut stream)? {
+        Reply::Text(text) => Ok(*text),
+        Reply::Error(error) => Err(io::Error::other(error)),
+        _ => Err(io::Error::other("terminal host did not send its screen")),
+    }
+}
+
+fn screen_text(screen: &vt100::Screen) -> Text {
+    // A copy, so reading never moves what an attached dashboard has scrolled to.
+    let mut screen = screen.clone();
+    let (rows, cols) = screen.size();
+    let line = |screen: &vt100::Screen| screen.rows(0, cols).next().unwrap_or_default();
+    screen.set_scrollback(usize::MAX);
+    let mut scrollback = Vec::new();
+    while screen.scrollback() > 0 {
+        scrollback.push(line(&screen).trim_end().to_owned());
+        screen.set_scrollback(screen.scrollback() - 1);
+    }
+    Text {
+        rows,
+        cols,
+        alternate: screen.alternate_screen(),
+        scrollback,
+        screen: screen
+            .rows(0, cols)
+            .map(|row| row.trim_end().to_owned())
+            .collect(),
     }
 }
 
@@ -507,6 +562,10 @@ fn host_loop(
                             viewer.terminate();
                             peer.stop_pending = true;
                             ending = true;
+                        }
+                        Request::Text { id } if id == record.id => {
+                            peer.queue(&Reply::Text(Box::new(screen_text(viewer.screen()))))?;
+                            peer.closing = true;
                         }
                         Request::Attach { version, id }
                             if !peer.attached
