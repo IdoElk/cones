@@ -51,9 +51,10 @@ impl Fixture {
     fn codex() -> Self {
         let f = Self::new();
         fs::create_dir_all(f.codex_home()).unwrap();
-        let offered = fs::read_to_string(&f.jobs)
-            .unwrap()
-            .replace("codex_enabled: false", "claude_enabled: false\n  pi_enabled: false");
+        let offered = fs::read_to_string(&f.jobs).unwrap().replace(
+            "codex_enabled: false",
+            "claude_enabled: false\n  pi_enabled: false",
+        );
         fs::write(&f.jobs, offered).unwrap();
         f
     }
@@ -409,8 +410,16 @@ fn a_codex_launch_returns_the_thread_its_daemon_made_and_leaves_no_client_behind
     let out = f.launch("ok", "codex", "rebase onto main\nand keep the tests green");
     assert!(out.status.success(), "{}", stderr(&out));
     let id = stdout(&out);
-    assert_eq!(f.codex_threads(), [id.clone()], "the thread the daemon made");
-    assert!(stderr(&out).contains("native session id"), "{}", stderr(&out));
+    assert_eq!(
+        f.codex_threads(),
+        [id.clone()],
+        "the thread the daemon made"
+    );
+    assert!(
+        stderr(&out).contains("native session id"),
+        "{}",
+        stderr(&out)
+    );
 
     // The daemon holds the thread, so the launching client is gone and the folder has one
     // row for one agent, which the dashboard joins like any other daemon thread.
@@ -423,7 +432,11 @@ fn a_codex_launch_returns_the_thread_its_daemon_made_and_leaves_no_client_behind
     assert_eq!(codex[0]["session"]["session_id"], id.as_str());
     assert_eq!(codex[0]["session"]["kind"], "daemon");
     assert_eq!(codex[0]["session"]["title"], "rebase onto main");
-    assert_eq!(f.hosted_pids(), [] as [u32; 0], "the client was left hosted");
+    assert_eq!(
+        f.hosted_pids(),
+        [] as [u32; 0],
+        "the client was left hosted"
+    );
 
     let recovery = f.recovery();
     assert_eq!(recovery[0]["event"], "launch.submitted");
