@@ -79,7 +79,8 @@ fn run_times_display_in_the_local_timezone_and_keep_utc_in_json() {
     );
 }
 
-/// `--dir` is the coordinator's read: the folder it was launched in, plus the worktrees under it.
+/// `--dir` is a folder and everything under it, worktrees included. The coordinator's roster
+/// narrows this to the folder's repository.
 #[test]
 fn ls_scopes_runs_and_sessions_to_a_folder_and_its_worktrees() {
     use cones::config::HarnessKind;
@@ -1603,11 +1604,15 @@ impl Coordinated {
     }
 
     fn worker(&self, id: &str) {
+        self.worker_at(id, &self.work);
+    }
+
+    fn worker_at(&self, id: &str, cwd: &std::path::Path) {
         fs::write(
             self.registry.join(format!("{id}.json")),
             serde_json::json!({
                 "pid": std::process::id(), "sessionId": id,
-                "cwd": self.work.canonicalize().unwrap(), "kind": "interactive", "status": "idle"
+                "cwd": cwd.canonicalize().unwrap(), "kind": "interactive", "status": "idle"
             })
             .to_string(),
         )
@@ -1902,6 +1907,73 @@ fn a_claim_does_not_replay_the_mail_that_predates_it() {
             .contains("1 inbox entries predate this claim")
     );
     assert_eq!(f.run(&["mail"]), "mail: none pending\n");
+}
+
+/// The roster is the folder's own tree. A coordinator of a hub folder holding many unrelated
+/// projects once greeted a session in one of them; a project under the folder is not its
+/// worker, while a subfolder of the same checkout and a worktree stored inside it are.
+#[test]
+fn the_roster_leaves_out_other_projects_under_the_folder() {
+    let f = Coordinated::new();
+    let project = f.work.join("outputs/deck");
+    fs::create_dir_all(&project).unwrap();
+    f.worker_at("in-subproject", &project);
+    let roster = |f: &Coordinated| {
+        let out = f.run(&["tick"]);
+        let rows = out
+            .split("--- roster")
+            .nth(1)
+            .unwrap()
+            .split("--- mail")
+            .next()
+            .unwrap();
+        rows.to_owned()
+    };
+    let rows = roster(&f);
+    assert!(rows.contains("worker-one"), "{rows}");
+    assert!(
+        !rows.contains("in-subproject"),
+        "a folder outside any repository has only its own sessions: {rows}"
+    );
+
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&f.work)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+    git(&["worktree", "add", "-q", ".claude/worktrees/w"]);
+    f.worker_at("in-worktree", &f.work.join(".claude/worktrees/w"));
+    let nested = f.work.join("vendor/lib");
+    fs::create_dir_all(&nested).unwrap();
+    let out = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&nested)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    f.worker_at("in-nested-repo", &nested);
+    let rows = roster(&f);
+    for id in ["worker-one", "in-subproject", "in-worktree"] {
+        assert!(
+            rows.contains(id),
+            "{id} is in the folder's repository: {rows}"
+        );
+    }
+    assert!(
+        !rows.contains("in-nested-repo"),
+        "a separate repository under the folder is another project: {rows}"
+    );
 }
 
 /// A second coordinator in a folder someone else holds is told to stand down. Without that the

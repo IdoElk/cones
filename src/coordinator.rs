@@ -69,12 +69,12 @@ impl Folder {
         )
     }
 
-    /// This folder and the worktrees under it, which is the same read `cones ls --dir` prints.
+    /// The sessions working in this folder's own tree: see [`member`].
     pub fn roster(&self) -> Result<Vec<Session>> {
         Ok(self
             .fleet()?
             .into_iter()
-            .filter(|s| fleet::contains(&self.path, &s.cwd))
+            .filter(|s| member(&self.path, &s.cwd))
             .collect())
     }
 
@@ -87,6 +87,26 @@ impl Folder {
     /// before it read but never acted on.
     fn acknowledged(&self, total: usize) -> usize {
         read_number(&self.dir().join("inbox.ack")).min(total)
+    }
+}
+
+/// Whether a session working in `cwd` is this folder's worker: the folder itself, or a path under
+/// it in the same repository, which covers its subfolders and the worktrees stored inside it. A
+/// subfolder outside that repository is another project, so a coordinator of a hub folder that
+/// holds many projects does not take on every session under it. A folder outside any
+/// repository therefore has only the sessions working in it exactly.
+fn member(folder: &Path, cwd: &Path) -> bool {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let (folder, cwd) = (real(folder), real(cwd));
+    if cwd == folder {
+        return true;
+    }
+    if !cwd.starts_with(&folder) {
+        return false;
+    }
+    match (crate::tui::git_dirs(&folder), crate::tui::git_dirs(&cwd)) {
+        (Some(f), Some(c)) => f.common == c.common,
+        _ => false,
     }
 }
 
@@ -591,7 +611,7 @@ pub fn send(folder: &Folder, id: &str, text: &str, greet: bool) -> Result<String
     let fleet_rows = folder.fleet()?;
     let roster: Vec<&Session> = fleet_rows
         .iter()
-        .filter(|s| fleet::contains(&folder.path, &s.cwd))
+        .filter(|s| member(&folder.path, &s.cwd))
         .collect();
     let known: Vec<&str> = roster.iter().map(|s| s.session_id.as_str()).collect();
     let id = resolve(&folder.path, &known, id)?;

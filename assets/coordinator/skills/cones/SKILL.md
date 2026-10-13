@@ -17,8 +17,8 @@ harnesses' own records, so you can use it to reach beyond your own session.
 2. **Talk to it.** Send a note to a live session in a folder, read the replies, and wait until a
    worker needs input, fails, leaves or answers. `cones comms --dir PATH send ID TEXT`, or your
    native SendMessage when you and the recipient are both Claude, which `send` refuses. The
-   folder's roster is every live session `cones ls --dir PATH` lists, whoever launched it; you
-   need not be on it. Replies come back to that folder: `cones comms --dir PATH wait` blocks
+   folder's roster is every live session in that folder or under it in the same repository,
+   whoever launched it; a separate project under it is not on it, and you need not be on it. Replies come back to that folder: `cones comms --dir PATH wait` blocks
    until one lands, `mail` prints it, and `mail --ack N` marks it handled.
 3. **Start new work.** Launch a session in any folder on any enabled harness, the way the
    owner's dashboard does, and get its id back. `cones launch --dir PATH --harness NAME PROMPT`

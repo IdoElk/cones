@@ -3197,9 +3197,9 @@ pub fn launch_dir(text: &str, base: &Path, fallback: &Path) -> Result<PathBuf, S
 /// repository's common one. Absolute, because from a subdirectory of a plain checkout the two
 /// print `/repo/.git` and `../.git`, unequal as text while naming the same directory.
 #[derive(Clone, PartialEq, Debug)]
-struct GitDirs {
-    own: PathBuf,
-    common: PathBuf,
+pub(crate) struct GitDirs {
+    pub(crate) own: PathBuf,
+    pub(crate) common: PathBuf,
 }
 
 /// One `git rev-parse` per folder, reused while the folder's repository layout holds.
@@ -3210,7 +3210,7 @@ struct GitDirs {
 /// ancestor itself moved.
 /// ponytail: 60s age limit and a 256-folder cap; watch the git directory if a folder list that
 /// large, or a worktree moved mid-session, has to show up sooner than a minute.
-fn git_dirs(dir: &Path) -> Option<GitDirs> {
+pub(crate) fn git_dirs(dir: &Path) -> Option<GitDirs> {
     const VALID_FOR: Duration = Duration::from_secs(60);
     const FOLDERS: usize = 256;
     type Fingerprint = Option<(u64, std::time::SystemTime, u64)>;

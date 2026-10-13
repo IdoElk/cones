@@ -287,9 +287,10 @@ roster context/cost and pending mail. Neither command calls a model. Legacy `coo
 ## Comms
 
 These commands also serve dispatchers without a coordinator. `--dir` defaults to cwd. The
-folder's roster is every live session `cones ls --dir` lists there, under the same
-[folder filtering](#reading-runs-and-sessions), whoever launched it; the sender need not be on
-it. A session id may be an unambiguous prefix of four or more characters, as with `show`.
+folder's roster is every live session working in the folder itself or under it in the same
+repository, which includes subfolders of the checkout and worktrees stored inside it, whoever
+launched it; the sender need not be on it. A subfolder that is not part of the folder's
+repository, such as a separate project under a hub folder, is not on it, unlike `cones ls --dir`. A session id may be an unambiguous prefix of four or more characters, as with `show`.
 Commands make no model calls, though delivery can cause a recipient's native turn.
 
 ```sh

@@ -144,7 +144,9 @@ armed. Other agents may still send into it.
 
 ### Roster and messaging
 
-The coordinator uses `cones ls --dir --json` and the same native discovery as the dashboard.
+The coordinator uses the same native discovery as the dashboard, narrowed to the folder's
+own repository: a separate project under the folder is not on its
+[roster](cli.md#comms).
 Delivery requires the recipient harness's `message` operation; cones never substitutes
 terminal typing. Codex delivery uses the daemon belonging to the recipient's native home.
 A greeting is recorded once per session. Delivery does not establish that a worker read or
