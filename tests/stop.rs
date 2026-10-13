@@ -134,18 +134,48 @@ impl Fixture {
     }
 }
 
-/// A process cones may observe but must never end on its own.
+/// Start `command` in a session of its own, with a terminal of its own or with none. That is
+/// all that tells a session in someone's terminal from a headless run, and what the test
+/// itself was started from must not decide it.
+pub fn own_session(command: &mut Command, terminal: bool) {
+    use std::os::unix::process::CommandExt;
+    let slave = terminal.then(|| {
+        let (mut master, mut slave) = (0, 0);
+        let (null, none) = (std::ptr::null_mut(), std::ptr::null_mut());
+        // The master stays open for the life of the test binary, so the terminal does too.
+        assert_eq!(
+            unsafe { libc::openpty(&mut master, &mut slave, null, none, std::ptr::null_mut()) },
+            0,
+            "openpty"
+        );
+        slave
+    });
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some(fd) = slave
+                && libc::ioctl(fd, libc::TIOCSCTTY as _, 0) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+/// A process in a terminal cones does not own: cones may observe it and must never end it.
 struct Idle(Child);
 impl Idle {
     fn new() -> Self {
-        Self(
-            Command::new("/bin/sleep")
-                .arg("120")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .spawn()
-                .unwrap(),
-        )
+        let mut command = Command::new("/bin/sleep");
+        command
+            .arg("120")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null());
+        own_session(&mut command, true);
+        Self(command.spawn().unwrap())
     }
     fn alive(&self) -> bool {
         unsafe { libc::kill(self.0.id() as i32, 0) == 0 }

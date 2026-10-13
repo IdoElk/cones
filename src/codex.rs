@@ -314,6 +314,24 @@ pub fn processes(ps: &str) -> Vec<Process> {
         .collect()
 }
 
+/// The model a client was started with, from `-m` or `--model` before any `--`. Codex records
+/// its model with the first turn; until then, and for a run that keeps no rollout, this is all
+/// there is to show.
+// ponytail: whitespace words; a prompt that spells the flag reads as the flag.
+pub fn launched_model(command: &str) -> Option<String> {
+    let mut words = command.split_whitespace().take_while(|w| *w != "--");
+    while let Some(word) = words.next() {
+        let value = match word {
+            "-m" | "--model" => words.next(),
+            _ => word.strip_prefix("--model="),
+        };
+        if let Some(model) = value.filter(|m| !m.is_empty()) {
+            return Some(model.to_owned());
+        }
+    }
+    None
+}
+
 /// Stop parsing options at the prompt so its text cannot identify a client or thread, and
 /// return the prompt itself: until the daemon makes the thread, it is all the row can say.
 fn client_options<'a>(

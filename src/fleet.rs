@@ -1672,6 +1672,15 @@ pub(crate) fn all_observed(
                     .is_some_and(|(command, _)| launched_with(command, skip))
                     .then_some(true);
             }
+            if s.model.is_none()
+                && kind == crate::config::HarnessKind::Codex
+                && let Some(pid) = s.pid
+            {
+                let argv = argv.get_or_insert_with(|| pass_argv("/bin/ps"));
+                s.model = argv
+                    .get(&pid)
+                    .and_then(|(command, _)| crate::codex::launched_model(command));
+            }
             out.push(s);
         }
     }

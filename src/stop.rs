@@ -1,6 +1,6 @@
 //! `cones stop ID`: end one session's work and keep its conversation.
 //!
-//! Stopping is not deleting and not hiding. Three mechanisms are supported, and a target served
+//! Stopping is not deleting and not hiding. Four mechanisms are supported, and a target served
 //! by none is refused rather than approximated:
 //!
 //! * a harness that declares a native `stop` operation — Claude's background sessions, whose
@@ -8,6 +8,8 @@
 //! * a Codex daemon thread, whose running turn and background terminals the daemon ends over
 //!   its own protocol, with or without a client attached;
 //! * a cones-owned persistent terminal, whose host confirms the native client it owns has exited.
+//! * a headless run, a client with no terminal such as `codex exec` under a dispatcher, which
+//!   nothing but a signal can end: its verified process is terminated and seen to exit.
 //!
 //! Signalling a daemon, removing a job record or closing an attach client would each report
 //! success while meaning something else, so none of them stands in for a missing native stop.
@@ -84,6 +86,29 @@ pub fn session(state: &Path, claude: &Path, id: &str) -> Result<String> {
     let spec = harness::by_name(&session.harness)
         .with_context(|| format!("unknown session harness {}", session.harness))?;
     let kind = spec.session(session.kind.as_deref());
+    if kind.lifetime != harness::spec::Lifetime::Daemon
+        && let Some(pid) = session.pid.filter(|&pid| process(pid).0 == "??")
+    {
+        ensure!(
+            crate::fleet::terminate(pid, &spec.name)?,
+            "{} run {id} had already exited",
+            spec.name
+        );
+        // A process its parent has not collected yet has ended all the same.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !matches!(process(pid).1.chars().next(), None | Some('Z')) {
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "{} run {id} (pid {pid}) was signalled and has not exited",
+                spec.name
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        return Ok(format!(
+            "stopped the headless {} run {id} (pid {pid}); its conversation is kept\n",
+            spec.name
+        ));
+    }
     if kind.lifetime != harness::spec::Lifetime::Daemon {
         bail!(
             "{} session {id} runs in a terminal cones does not own, so only that terminal can \
@@ -138,4 +163,16 @@ pub fn session(state: &Path, claude: &Path, id: &str) -> Result<String> {
         spec.name,
         home.display()
     ))
+}
+
+/// The controlling terminal and state of `pid` as `ps` prints them: `??` for no terminal, and
+/// an empty state once the process is gone.
+fn process(pid: u32) -> (String, String) {
+    let out = Command::new("/bin/ps")
+        .args(["-o", "tty=,stat=", "-p", &pid.to_string()])
+        .output();
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    let mut words = text.as_deref().unwrap_or("").split_whitespace();
+    let mut next = || words.next().unwrap_or("").to_owned();
+    (next(), next())
 }

@@ -106,6 +106,8 @@ impl Fixture {
         for (name, value) in env {
             command.env(name, value);
         }
+        // A dispatcher's run has no terminal, whatever the test was started from.
+        super::stop::own_session(&mut command, false);
         let mut child = command.spawn().unwrap();
         std::io::Write::write_all(
             &mut child.stdin.take().unwrap(),
@@ -418,7 +420,15 @@ fn a_headless_codex_run_is_a_row_when_its_configured_home_is_spelled_differently
     assert_ne!(real, task, "the fixture root is not behind a symlink");
     let pid = f.stand_in(
         "codex",
-        &["exec", "--json", "-o", "last.txt", "review the diff"],
+        &[
+            "exec",
+            "--json",
+            "-m",
+            "gpt-5",
+            "-o",
+            "last.txt",
+            "review the diff",
+        ],
         &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
     );
     f.ok(&[
@@ -432,6 +442,8 @@ fn a_headless_codex_run_is_a_row_when_its_configured_home_is_spelled_differently
     let mine: Vec<_> = rows.iter().filter(|row| row["pid"] == pid).collect();
     assert_eq!(mine.len(), 1, "{rows:?}");
     assert_eq!(mine[0]["title"], "review the diff", "{}", mine[0]);
+    // No rollout reports a model yet, so the one it was started with stands in.
+    assert_eq!(mine[0]["model"], "gpt-5", "{}", mine[0]);
     assert_eq!(
         mine[0]["cwd"].as_str().map(PathBuf::from),
         f.path().canonicalize().ok(),
@@ -540,9 +552,9 @@ fn a_finished_run_in_a_pattern_home_is_read_as_history() {
 }
 
 /// A headless Codex run in a configured home is read and controlled there: the row carries
-/// what its rollout reports, `cones show` prints the conversation, and a stop is refused.
+/// what its rollout reports, `cones show` prints the conversation, and a stop ends its process.
 #[test]
-fn a_headless_codex_run_in_a_configured_home_is_shown_and_not_stopped() {
+fn a_headless_codex_run_in_a_configured_home_is_shown_and_stopped() {
     let mut f = Fixture::new();
     let (task, elsewhere) = (f.path().join("task-codex"), f.path().join("elsewhere"));
     let cwd = f.path().canonicalize().unwrap();
@@ -552,7 +564,7 @@ fn a_headless_codex_run_in_a_configured_home_is_shown_and_not_stopped() {
     }
     let pid = f.named(
         "codex",
-        &["exec", "review the diff"],
+        &["exec", "-m", "gpt-4.1", "review the diff"],
         &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
     );
     let at = |secs| {
@@ -582,26 +594,28 @@ fn a_headless_codex_run_in_a_configured_home_is_shown_and_not_stopped() {
     let row = rows.iter().find(|r| r["pid"] == pid).expect("no codex row");
     assert_eq!(row["session_id"], OTHER, "{row}");
     assert_eq!(row["state"], "active", "{row}");
+    // What the rollout reports wins over what the command line asked for.
     assert_eq!(row["model"], "gpt-5", "{row}");
     assert_eq!(row["title"], "review the diff", "{row}");
 
     let shown = f.ok(&["show", OTHER]);
     assert!(shown.contains("review the diff"), "{shown}");
 
-    // The dispatcher owns the run: cones reads it and declines to end it.
-    let out = f.cones(&["stop", OTHER]);
-    let said = String::from_utf8_lossy(&out.stderr);
+    // No client is attached to take a note, and saying so beats a note nobody reads.
+    let dir = f.path().to_str().unwrap();
+    let out = f.cones(&["comms", "--dir", dir, "send", OTHER, "status?"]);
+    assert!(!out.status.success(), "a note was sent to a headless run");
+
+    // Nothing but a signal ends a run with no terminal, so a stop sends one and sees it exit.
+    let said = f.ok(&["stop", OTHER]);
     assert!(
-        !out.status.success(),
-        "a run cones does not own was stopped"
-    );
-    assert!(
-        said.contains("runs in a terminal cones does not own"),
+        said.contains(&format!("stopped the headless codex run {OTHER}")),
         "{said}"
     );
     let child = f.children.last_mut().unwrap();
-    assert!(
-        child.try_wait().unwrap().is_none(),
-        "the refused stop ended the run"
-    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "the stopped run is still alive");
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
