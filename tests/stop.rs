@@ -324,8 +324,13 @@ type Calls = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
 /// an interrupt is acknowledged before the turn reports interrupted, and a clean before the
 /// terminal list empties. Returns every request it was sent.
 fn codex_daemon(f: &Fixture, loaded: &[&str]) -> Calls {
+    codex_daemon_in(&f.root.path().join(".codex"), loaded)
+}
+
+/// `codex_daemon` on the control socket of the Codex home `home`.
+fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
     use tungstenite::Message;
-    let dir = f.root.path().join(".codex/app-server-control");
+    let dir = home.join("app-server-control");
     fs::create_dir_all(&dir).unwrap();
     let listener =
         std::os::unix::net::UnixListener::bind(dir.join("app-server-control.sock")).unwrap();
@@ -382,6 +387,92 @@ fn codex_daemon(f: &Fixture, loaded: &[&str]) -> Calls {
         }
     });
     seen
+}
+
+/// A process started from a script under the fixture, ended when the test is.
+struct StandIn(Child);
+impl StandIn {
+    fn new(program: &Path, script: &str, env: &[(&str, &Path)]) -> Self {
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        fs::write(program, format!("#!/usr/bin/python3\n{script}\n")).unwrap();
+        fs::set_permissions(program, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut command = Command::new(program);
+        command.stdin(Stdio::null()).stdout(Stdio::null());
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        Self(command.spawn().unwrap())
+    }
+}
+impl Drop for StandIn {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A thread in a home nothing configures is reachable only because its live client names that
+/// home. `cones ls` listed such a thread while `cones stop` called it not a live session: the
+/// stop looked for it before anything had looked for the client. The stop must find it and
+/// reach the daemon of the home that holds it, not the one beside Claude's.
+#[test]
+fn a_codex_thread_in_a_home_its_live_client_names_is_stopped_through_that_home() {
+    let f = Fixture::new();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec0606e";
+    let home = f.root.path().join("task");
+    let day = home.join("sessions/2026/10/12");
+    fs::create_dir_all(&day).unwrap();
+    let meta = json!({"timestamp": "2026-10-12T10:00:00.000Z", "type": "session_meta", "payload": {
+        "id": id, "session_id": id, "timestamp": "2026-10-12T10:00:00.000Z",
+        "cwd": f.root.path(), "originator": "codex-tui", "cli_version": "0.162.1", "source": "cli"}});
+    fs::write(
+        day.join(format!("rollout-2026-10-12T10-00-00-{id}.jsonl")),
+        format!("{meta}\n"),
+    )
+    .unwrap();
+    // The daemon holds the thread's writer lock, which is what makes it a row with no client
+    // record: this thread was never launched by cones.
+    let lock = home.join(format!("thread-writer-locks/{id}.lock"));
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let daemon = StandIn::new(
+        &f.root.path().join("standin/daemon.py"),
+        &format!("import time\nheld = open({lock:?}, 'w')\ntime.sleep(120)"),
+        &[],
+    );
+    fs::create_dir_all(home.join("app-server-daemon")).unwrap();
+    fs::write(
+        home.join("app-server-daemon/app-server.pid"),
+        json!({"pid": daemon.0.id()}).to_string(),
+    )
+    .unwrap();
+    let calls = codex_daemon_in(&home, &[id]);
+    let _client = StandIn::new(
+        &f.root.path().join("standin/codex"),
+        "import time\ntime.sleep(120)",
+        &[("HOME", f.root.path()), ("CODEX_HOME", &home)],
+    );
+
+    // The python3 shim hides the client's environment until it re-executes the interpreter.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let out = loop {
+        let out = f.stop(id);
+        if out.status.success() || std::time::Instant::now() > deadline {
+            break out;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout).contains(&format!("stopped codex thread {id} in {}", home.display())),
+        "{}",
+        text(&out.stdout)
+    );
+    let asked = methods(&calls);
+    assert!(
+        asked.contains(&"turn/interrupt".to_owned())
+            && asked.contains(&"thread/backgroundTerminals/clean".to_owned()),
+        "{asked:?}"
+    );
 }
 
 /// What the daemon was asked beyond the handshake and the status read every listing makes.

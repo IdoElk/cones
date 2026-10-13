@@ -61,7 +61,16 @@ impl Fixture {
 
     /// A Claude client as `ps` shows one, running against `home` under `user`'s HOME.
     fn client(&mut self, user: &Path, home: &Path) -> u32 {
-        let program = self.path().join("standin/claude");
+        self.stand_in(
+            "claude",
+            &[],
+            &[("HOME", user), ("CLAUDE_CONFIG_DIR", home)],
+        )
+    }
+
+    /// A client of `harness` as `ps` shows one, started in the fixture's folder.
+    fn stand_in(&mut self, harness: &str, args: &[&str], env: &[(&str, &Path)]) -> u32 {
+        let program = self.path().join("standin").join(harness);
         fs::create_dir_all(program.parent().unwrap()).unwrap();
         fs::write(
             &program,
@@ -69,15 +78,37 @@ impl Fixture {
         )
         .unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
-        let child = Command::new(&program)
-            .env("HOME", user)
-            .env("CLAUDE_CONFIG_DIR", home)
-            .stdin(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut command = Command::new(&program);
+        command
+            .args(args)
+            .current_dir(self.path().canonicalize().unwrap())
+            .stdin(Stdio::null());
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let child = command.spawn().unwrap();
         let pid = child.id();
         self.children.push(child);
         pid
+    }
+
+    /// The rows `cones ls` reports for `harness`, once one of them satisfies `ready`. The
+    /// python3 shim hides a stand-in's environment until it re-executes the real interpreter.
+    fn rows_when(&self, harness: &str, ready: impl Fn(&Value) -> bool) -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let rows: Vec<Value> = self
+                .ok(&["ls", "--json"])
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|row| row["session"]["harness"] == harness)
+                .map(|row| row["session"].clone())
+                .collect();
+            if rows.iter().any(&ready) || Instant::now() > deadline {
+                return rows;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     /// A live registry entry in `home`, with the conversation Claude keeps beside it.
@@ -255,4 +286,105 @@ fn a_live_client_of_this_user_names_a_home_that_is_then_read() {
     // By now the other client's environment is readable too, and it is still not listed.
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(ids(&f.sessions()), [TASK]);
+}
+
+/// pi keeps a conversation in a file under its home, named after the folder it runs in. A
+/// client pointed at another home is attributed to the file in that home, so its row has the
+/// conversation's title and `cones show` reads it.
+#[test]
+fn a_pi_client_in_another_home_is_a_row_with_its_conversation() {
+    let mut f = Fixture::new();
+    let task = f.path().join("task-pi");
+    let cwd = f.path().canonicalize().unwrap();
+    let user = f.path().to_owned();
+    let pid = f.stand_in(
+        "pi",
+        &[],
+        &[("HOME", &user), ("PI_CODING_AGENT_DIR", &task)],
+    );
+    let folder = cwd
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace('/', "-");
+    let dir = task.join(format!("sessions/--{folder}--"));
+    fs::create_dir_all(&dir).unwrap();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let header = json!({"type": "session", "version": 3, "id": TASK, "timestamp": now, "cwd": cwd});
+    let said = json!({"type": "message", "id": "m1", "parentId": null, "timestamp": now,
+        "message": {"role": "user", "content": [{"type": "text", "text": "rotate the staging keys"}]}});
+    fs::write(
+        dir.join(format!("{TASK}.jsonl")),
+        format!("{header}\n{said}\n"),
+    )
+    .unwrap();
+
+    let rows = f.rows_when("pi", |row| row["pid"] == pid && row["title"].is_string());
+    let mine: Vec<_> = rows.iter().filter(|row| row["pid"] == pid).collect();
+    assert_eq!(mine.len(), 1, "{rows:?}");
+    assert_eq!(mine[0]["title"], "rotate the staging keys", "{}", mine[0]);
+    assert_eq!(
+        mine[0]["transcript_path"]
+            .as_str()
+            .map(|p| Path::new(p).starts_with(&task)),
+        Some(true),
+        "{}",
+        mine[0]
+    );
+    let shown = f.ok(&["show", TASK]);
+    assert!(shown.contains("rotate the staging keys"), "{shown}");
+}
+
+/// OpenCode keeps every conversation in one database under its data home. A client pointed
+/// at another data home, showing a session that database holds, is a row with that session's
+/// title, read from that database.
+#[test]
+fn an_opencode_client_in_another_data_home_is_a_row_with_its_session() {
+    let mut f = Fixture::new();
+    let data = f.path().join("task-xdg");
+    let cwd = f.path().canonicalize().unwrap();
+    fs::create_dir_all(data.join("opencode")).unwrap();
+    let db = data.join("opencode/opencode.db");
+    let sql = include_str!("../assets/harnesses/fixtures/opencode.sql")
+        .replace("/fixture", &cwd.to_string_lossy());
+    let mut sqlite = Command::new("sqlite3")
+        .arg(&db)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(sqlite.stdin.as_mut().unwrap(), sql.as_bytes()).unwrap();
+    assert!(sqlite.wait().unwrap().success());
+    // OpenCode reads `--session` from its own arguments, so the stand-in must be named
+    // opencode itself: a script's interpreter would come first on the command line.
+    let mut client = {
+        use std::os::unix::process::CommandExt;
+        Command::new("node")
+            .arg0("opencode")
+            .args(["-", "--session", "ses_fixture"])
+            .current_dir(&cwd)
+            .env("HOME", f.path())
+            .env("XDG_DATA_HOME", &data)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    std::io::Write::write_all(
+        &mut client.stdin.take().unwrap(),
+        b"setTimeout(() => {}, 600000)",
+    )
+    .unwrap();
+    let pid = client.id();
+    f.children.push(client);
+
+    let rows = f.rows_when("opencode", |row| {
+        row["pid"] == pid && row["title"].is_string()
+    });
+    let mine: Vec<_> = rows.iter().filter(|row| row["pid"] == pid).collect();
+    assert_eq!(mine.len(), 1, "{rows:?}");
+    assert_eq!(mine[0]["title"], "Named OpenCode", "{}", mine[0]);
+    assert_eq!(
+        mine[0]["transcript_path"].as_str().map(PathBuf::from),
+        Some(db),
+        "{}",
+        mine[0]
+    );
 }

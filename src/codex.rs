@@ -979,6 +979,8 @@ pub fn thread_rows(
 /// The daemon thread `id` names in any Codex home, whether or not a client is showing it.
 /// A thread has no process of its own, so process discovery alone never finds one.
 pub fn thread(claude: &Path, state: &Path, id: &str) -> Option<Session> {
+    // A command that names one thread has listed nothing yet, so no client has named its home.
+    crate::fleet::detect_all_homes(claude);
     homes(claude)
         .iter()
         .flat_map(|home| thread_rows(home, state, &[], &BTreeSet::new()))

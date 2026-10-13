@@ -425,7 +425,9 @@ const HIDDEN_ENVIRONMENT_WAIT: chrono::TimeDelta = chrono::TimeDelta::seconds(10
 /// program alone, so each client is listed in the pass over the home it runs against, where
 /// its state, model and activity are recorded. A client of a home this fleet does not read,
 /// such as a capture fixture's, is in no pass: it would arrive as a row with a command line
-/// and nothing else. A client whose environment names no home is the first home's.
+/// and nothing else. A client whose environment cannot be read, as pi's cannot once it has
+/// retitled itself, is in every home's pass: the home holding its records attributes it, and
+/// `all_observed` keeps that row over the bare ones.
 ///
 /// Two `ps` reads cover the listed pids alone, because the whole table with environments is
 /// several times larger and every refresh would read it. macOS prints no environment for a
@@ -451,7 +453,6 @@ pub fn own_home_processes(
     };
     // A home outside the set, which only a caller naming its own root passes, is read alone.
     let alone = !read.contains(&of.to_owned());
-    let first = alone || read.first().is_some_and(|h| h == of);
     let list = pids
         .iter()
         .map(u32::to_string)
@@ -467,12 +468,12 @@ pub fn own_home_processes(
                 return true;
             };
             match with_environment.get(pid) {
-                None => with_environment.is_empty() && first,
+                None => with_environment.is_empty(),
                 Some(full) if !full.starts_with(argv.as_str()) => false,
                 Some(full) => match environment(full, argv) {
-                    None => first && Utc::now() - *started >= HIDDEN_ENVIRONMENT_WAIT,
+                    None => Utc::now() - *started >= HIDDEN_ENVIRONMENT_WAIT,
                     Some(env) => match home.of_process(env) {
-                        None => first,
+                        None => true,
                         Some(used) => read.contains(&used) && (alone || used == of),
                     },
                 },
@@ -1629,7 +1630,9 @@ pub(crate) fn all_observed(
         // Each home is its own pass over the harness. Saved daemon threads are supplied
         // separately by the dashboard.
         let mut found = Vec::new();
-        for (i, home) in spec.home.all(claude).into_iter().enumerate() {
+        let homes = spec.home.all(claude);
+        let passes = homes.len();
+        for (i, home) in homes.into_iter().enumerate() {
             let started = std::time::Instant::now();
             let result = spec.discovery.handler.sessions(&home);
             observe(&spec.name, &home, started.elapsed(), &result);
@@ -1640,6 +1643,9 @@ pub(crate) fn all_observed(
                 Err(e) if i == 0 => return Err(e),
                 Err(_) => {}
             }
+        }
+        if passes > 1 {
+            one_row_per_client(&mut found);
         }
         let skip = spec
             .launch
@@ -1664,6 +1670,22 @@ pub(crate) fn all_observed(
     }
     sort(&mut out);
     Ok(out)
+}
+
+/// Keep one row for a client that several homes' passes listed. A client whose home could not
+/// be read is in every pass: the home that holds its conversation names it, and the others
+/// saw only a process. With no home naming it, the first pass's row stands.
+fn one_row_per_client(found: &mut Vec<Session>) {
+    let named: HashSet<u32> = found
+        .iter()
+        .filter(|s| s.transcript_path.is_some())
+        .filter_map(|s| s.pid)
+        .collect();
+    let mut seen = HashSet::new();
+    found.retain(|s| match s.pid {
+        Some(pid) if s.transcript_path.is_none() => !named.contains(&pid) && seen.insert(pid),
+        _ => true,
+    });
 }
 
 /// Whether `command` carries the harness's `skip` arguments in order before a `--`, after
@@ -2153,6 +2175,38 @@ pub fn tilde(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// pi retitles itself and its environment can no longer be read, so an end to end test of
+    /// a pi client in a second home would need a process whose home nobody can read: it would
+    /// wait out `HIDDEN_ENVIRONMENT_WAIT` and show on every dashboard on the machine meanwhile.
+    /// The ways merging the passes can go wrong, each asserted below:
+    /// the bare row from a home without the client's records survives beside the named one;
+    /// the named row is dropped because a bare one came first;
+    /// a client no home names loses every row, or keeps one per home;
+    /// a row with no process, such as a daemon thread or a settled session, is dropped;
+    /// two clients are merged because their rows look alike.
+    #[test]
+    fn a_client_listed_by_several_homes_keeps_the_row_of_the_home_that_names_it() {
+        let row = |id: &str, pid: Option<u32>, transcript: Option<&str>| -> Session {
+            serde_json::from_value(serde_json::json!({
+                "session_id": id, "harness": "pi", "cwd": "/src/one", "state": "-",
+                "pid": pid, "transcript_path": transcript,
+            }))
+            .unwrap()
+        };
+        let mut found = vec![
+            row("pi-7", Some(7), None),
+            row("pi-8", Some(8), None),
+            row("thread", None, None),
+            row("named", Some(7), Some("/task/sessions/a.jsonl")),
+            row("pi-8", Some(8), None),
+            row("settled", None, Some("/task/sessions/b.jsonl")),
+            row("pi-9", Some(9), None),
+        ];
+        one_row_per_client(&mut found);
+        let ids: Vec<_> = found.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, ["pi-8", "thread", "named", "settled", "pi-9"]);
+    }
 
     #[test]
     fn statusline_effort_follows_the_declared_pointer_and_is_absent_without_one() {

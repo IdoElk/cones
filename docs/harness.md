@@ -32,9 +32,16 @@ which run against the home that recorded the session. A headless run, such as `c
 Detection is off for a harness whose home variable is set where cones runs, and for every
 harness while `CLAUDE_CONFIG_DIR` is set: an override pins what cones reads, and configured
 homes are still added. A client under another `HOME` whose home is not configured belongs to
-another fleet and is not listed. A client whose environment names no home is listed in the
-harness's own; an environment hidden by macOS keeps a process out for its first ten seconds,
-then lists it there. Reading another home starts nothing in it. Kernel information supplies cwd/open files, with `lsof` fallback. An unreadable
+another fleet and is not listed. A client whose environment cannot be read is offered to
+every home of its harness: the one holding its conversation names it, and otherwise it is a
+bare process row. An environment hidden by macOS keeps a process out for its first ten
+seconds. pi hides its environment once it starts, so a pi home is never detected and has to
+be configured. Reading another home starts nothing in it.
+
+Checked against live clients in a second home, with no model call: Codex 0.162.1 (listed,
+read, noted and stopped through that home's daemon), pi (configured home; listed and read)
+and OpenCode 1.18.31 (listed and read). The experimental terminal harnesses have no home
+variable, so they have no second home to read. Kernel information supplies cwd/open files, with `lsof` fallback. An unreadable
 process table fails the refresh rather than reporting that every session exited.
 
 ### Claude Code
