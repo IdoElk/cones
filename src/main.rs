@@ -136,6 +136,9 @@ enum Action {
         /// Print the shell command instead of starting anything.
         #[arg(long)]
         print_command: bool,
+        /// Keep the prompt out of cones' own launch record, for one that carries a secret.
+        #[arg(long)]
+        no_prompt_record: bool,
     },
     /// Start jobs whose ticks passed while the Mac was off or logged out. The login agent runs this.
     Catchup {
@@ -528,6 +531,7 @@ fn execute(cli: Cli) -> Result<i32> {
             model,
             effort,
             print_command,
+            no_prompt_record,
         } => {
             let dir = cones::expand_path(&dir, &cwd)?
                 .canonicalize()
@@ -565,6 +569,14 @@ fn execute(cli: Cli) -> Result<i32> {
                 );
             }
             let prompt = prompt.unwrap_or_default();
+            // Codex's command names its daemon's address, which only a running daemon reports.
+            ensure!(
+                !print_command
+                    || harness::spec(kind).launch.as_ref().map(|l| l.handler)
+                        != Some(harness::spec::LaunchHandler::CodexRemote)
+                    || cones::codex::daemon_pid(&cones::codex::home(&claude)).is_some(),
+                "{kind}'s command names its daemon's address and no daemon is running;                  --print-command starts nothing, so run `{kind} app-server daemon start` first"
+            );
             let start = harness::start(kind, &dir, prompt.trim(), &policy)?;
             if print_command {
                 let command = match start {
@@ -582,6 +594,7 @@ fn execute(cli: Cli) -> Result<i32> {
                 kind,
                 &dir,
                 prompt.trim(),
+                !no_prompt_record,
                 &policy,
                 start,
             )?;

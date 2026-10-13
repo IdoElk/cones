@@ -77,12 +77,14 @@ const POLL: Duration = Duration::from_millis(150);
 /// Start `kind` in `dir` and return the exact identity the public commands take for it.
 /// `start` is the command `harness::start` compiled, so the flags, provider and native home
 /// are the ones the dashboard's composer would have used.
+#[allow(clippy::too_many_arguments)]
 pub fn detached(
     state: &Path,
     claude: &Path,
     kind: HarnessKind,
     dir: &Path,
     prompt: &str,
+    record_prompt: bool,
     policy: &Policy,
     start: harness::Start,
 ) -> Result<Launched> {
@@ -96,6 +98,8 @@ pub fn detached(
     );
     let owned = format!("{kind}:start:{}", uuid::Uuid::new_v4());
     let since = chrono::Utc::now();
+    // A prompt the caller keeps to itself is recorded as absent, never shortened or hashed.
+    let recorded = record_prompt.then_some(prompt);
     // Written before anything is started. A launcher killed between here and the reply
     // leaves this line behind, so the work can be found and a retry is a duplicate someone
     // can see rather than an untracked second agent in the same folder.
@@ -104,7 +108,7 @@ pub fn detached(
         "launch.submitted",
         json!({
             "operation_id": owned, "harness": kind.to_string(),
-            "cwd": dir.to_string_lossy(), "prompt": prompt,
+            "cwd": dir.to_string_lossy(), "prompt": recorded,
         }),
     );
     let result = match (handler, start) {
@@ -131,7 +135,7 @@ pub fn detached(
         },
         json!({
             "operation_id": owned, "harness": kind.to_string(),
-            "cwd": dir.to_string_lossy(), "prompt": prompt,
+            "cwd": dir.to_string_lossy(), "prompt": recorded,
             "session_id": result.as_ref().ok().map(|l| l.id.clone()),
             "error": result.as_ref().err().map(|e| format!("{e:#}")),
         }),
@@ -510,7 +514,10 @@ fn rivals(
                         .unwrap_or(Path::new(cwd))
                         == dir
                 })
-                && data["prompt"].as_str().and_then(crate::fleet::headline) == *typed
+                // A launch that kept its prompt to itself could be waiting on these words.
+                && data["prompt"]
+                    .as_str()
+                    .is_none_or(|prompt| crate::fleet::headline(prompt) == *typed)
                 && at(line).is_some_and(|at| at > since - SETTLE)
                 && !settled(&data["operation_id"])
         })

@@ -812,6 +812,98 @@ fn print_command_starts_nothing_and_keeps_naming_the_folder() {
     );
 }
 
+/// Codex's command names its daemon's address, and asking for it used to start the daemon.
+/// With none running the print refuses and names the command that starts one; with one running
+/// it prints the address that daemon reports.
+#[test]
+fn print_command_for_codex_starts_no_daemon_and_prints_a_running_one() {
+    let f = Fixture::codex();
+    let pid_file = f.codex_home().join("app-server-daemon/app-server.pid");
+    let print = || {
+        f.cones(
+            "ok",
+            &[
+                "launch",
+                "--dir",
+                f.work.to_str().unwrap(),
+                "--harness",
+                "codex",
+                "--print-command",
+                "a prompt",
+            ],
+        )
+    };
+    let refused = print();
+    assert!(!refused.status.success(), "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("codex app-server daemon start"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(!pid_file.exists(), "--print-command started the daemon");
+
+    // A real launch starts the daemon, after which the same print has an address to name.
+    let launched = f.launch("ok", "codex", "rebase onto main");
+    assert!(launched.status.success(), "{}", stderr(&launched));
+    let daemon = fs::read_to_string(&pid_file).unwrap();
+    let printed = print();
+    assert!(printed.status.success(), "{}", stderr(&printed));
+    assert!(
+        stdout(&printed).contains("'--remote' 'unix://"),
+        "{}",
+        stdout(&printed)
+    );
+    assert_eq!(fs::read_to_string(&pid_file).unwrap(), daemon);
+    assert_eq!(f.codex_threads().len(), 1, "the print made a thread");
+}
+
+/// A prompt carrying a one-time secret must not be kept by cones. The launch is still recorded,
+/// so it can be found and a retry is visible, with the prompt absent from both records and
+/// from every other file under the state directory.
+#[test]
+fn no_prompt_record_keeps_the_prompt_out_of_everything_cones_writes() {
+    let f = Fixture::new();
+    let secret = "deploy with token-9f3c1e7a";
+    let out = f.cones(
+        "ok",
+        &[
+            "launch",
+            "--dir",
+            f.work.to_str().unwrap(),
+            "--harness",
+            "claude",
+            "--no-prompt-record",
+            secret,
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = stdout(&out);
+    let records = f.recovery();
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0]["event"], "launch.submitted");
+    assert_eq!(records[1]["event"], "launch.identified");
+    assert_eq!(records[1]["data"]["session_id"], id.as_str());
+    for record in &records {
+        assert!(record["data"]["prompt"].is_null(), "{record}");
+        assert_eq!(record["data"]["harness"], "claude");
+    }
+    let mut stack = vec![f.state()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(bytes) = fs::read(&path) {
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains("token-9f3c1e7a"),
+                    "{} kept the prompt",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn a_disabled_or_unknown_harness_is_refused_before_anything_starts() {
     let f = Fixture::new();

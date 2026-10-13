@@ -26,7 +26,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones` | Open the dashboard; requires a terminal. |
 | `cones run JOB [--trigger manual\|schedule]` | Run a configured job. Trigger defaults to `manual`; launchd passes `schedule`. |
 | `cones run --prompt "..." [JOB]` | Run a [one-off task](#one-off-tasks). |
-| `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--print-command]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
+| `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--print-command] [--no-prompt-record]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
 | `cones catchup [--dry-run]` | Recover [missed schedules](jobs.md#sleep-login-and-reboot). `--dry-run` prints `name missed <local time>` for each candidate and starts nothing. |
 | `cones ls [--dir PATH] [--job NAME] [--status S] [--json]` | [Read runs and live sessions](#reading-runs-and-sessions). |
 | `cones search QUERY [--dir PATH] [--harness NAME] [--json]` | [Search conversation history](#searching-conversations), including archived sessions. |
@@ -203,7 +203,11 @@ cones launch --dir ~/src/app --harness claude --model opus --effort high
 `--model` and `--effort` override defaults for this session only; unsupported flags fail.
 Other unset settings use [configured defaults](jobs.md#composer-harnesses). Omitting the prompt
 opens the session waiting for input, except for Codex, which needs one. `--print-command` prints folder, environment and command
-without launching or recording anything.
+without launching or recording anything. Codex's command names its daemon's address, so with
+no daemon running the print fails and names the command that starts one. `--no-prompt-record`
+keeps the prompt out of [`launches.jsonl`](#diagnostics): the launch is recorded with a null
+prompt. Use it for a prompt carrying a secret. A Codex launch is named by its prompt, so one
+overlapping an unrecorded launch in the same folder is reported unnamed rather than guessed.
 
 Claude and Codex launch into their daemons; OpenCode, pi and experimental launchers use
 persistent hosts. Each prints a discovered identifier on stdout, with its kind on stderr, and
@@ -373,7 +377,7 @@ jq -R 'fromjson? | select(.level == "error")' ~/.cones/tui-debug.log
 
 | Event | Data |
 | --- | --- |
-| `launch.submitted` | Dashboard/detached-CLI `operation_id`, harness, cwd and prompt, before launch. |
+| `launch.submitted` | Dashboard/detached-CLI `operation_id`, harness, cwd and prompt, before launch. The prompt is null under `--no-prompt-record`. |
 | `launch.identified` / `launch.unnamed` | Detached CLI resolved `session_id` or error; no `dashboard_id`. |
 | `resume.submitted` | History resume request: source id in `data.operation_id`, saved title in `data.prompt`. The title is not sent as an instruction. |
 
