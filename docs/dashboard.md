@@ -369,7 +369,9 @@ Escape, Tab or Ctrl+O closes the picker.
 ### Text and images
 
 The composer wraps up to eight rows. Standard cursor, word movement and deletion keys edit
-text; Shift+Enter inserts a newline. Ctrl+E edits a selected job only when the composer is
+text; Shift+Enter inserts a newline. A click in the text moves the cursor there. In a draft
+of several rows Up and Down move the cursor between rows, and move the list selection only
+from the first and last row. Ctrl+E edits a selected job only when the composer is
 empty. See [the binding source](../assets/bindings.yaml) for all aliases.
 
 Ctrl+V pastes clipboard images through macOS `osascript`. Temporary PNGs appear as

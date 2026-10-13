@@ -7,7 +7,8 @@
 //! launch to its native id), a refused launch that keeps the instruction, an instruction
 //! shorter than `start.min_prompt` that starts nothing until it is long enough, pre-existing
 //! sessions in every state grouped by folder and by state, arrows, the filter, pins and
-//! highlights, and `ctrl+x` twice removing a session through `claude rm`.
+//! highlights, `ctrl+x` twice removing a session through `claude rm`, and a wrapped draft
+//! whose cursor follows a click and the arrows, which reach the list only from its edge rows.
 use crate::dashboard::*;
 use serde_json::{Value, json};
 use std::{
@@ -1441,5 +1442,118 @@ fn plan_shows_the_cloud_or_the_signed_in_account_plan() {
     assert_eq!(plan("On vertex"), "vertex", "{screen}");
     assert_eq!(plan("On the account"), "max", "{screen}");
     assert_eq!(plan("Not answered"), "-", "{screen}");
+    d.quit();
+}
+
+/// A left press on the 0-based screen cell where `text` starts, as an SGR mouse report.
+fn click_on(d: &mut Dashboard, screen: &str, text: &str) {
+    let (row, column) = screen
+        .lines()
+        .enumerate()
+        .find_map(|(r, l)| l.find(text).map(|b| (r, l[..b].chars().count())))
+        .unwrap_or_else(|| panic!("{text:?} is not on screen:\n{screen}"));
+    let report = format!("\x1b[<0;{};{}M", column + 1, row + 1);
+    d.press(&format!("click {text:?}"), report.as_bytes());
+}
+
+#[test]
+fn a_click_in_the_draft_moves_the_composer_cursor_there() {
+    let mut d = Dashboard::new("claude-composer-click", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    d.start();
+    d.wait_text("✻ claude › ");
+    // Sixty words wrap the draft over several rows of the list's half of the frame.
+    let draft: Vec<String> = (1..=60).map(|n| format!("w{n:02}")).collect();
+    d.typed(&draft.join(" "));
+    let screen = d.wait_text("w60");
+    assert!(
+        !line_of(&screen, "w60").contains("w01"),
+        "the draft did not wrap:\n{screen}"
+    );
+    d.capture("wrapped-draft");
+
+    // On a character of the first row, and of the wrapped row: typing lands before it.
+    click_on(&mut d, &screen, "w07");
+    d.typed("A");
+    let screen = d.wait_text("w06 Aw07 w08");
+    click_on(&mut d, &screen, "w55");
+    d.typed("B");
+    let screen = d.wait_text("w54 Bw55 w56");
+    // Left of the text, on the harness name, is the start of the draft.
+    click_on(&mut d, &screen, "claude › ");
+    d.typed("C");
+    let screen = d.wait_text("claude › Cw01 w02");
+    // Past the end of the last row, still inside the box, is the end of the draft.
+    let (row, column) = screen
+        .lines()
+        .enumerate()
+        .find_map(|(r, l)| l.find("w60").map(|b| (r, b + 10)))
+        .unwrap();
+    let report = format!("\x1b[<0;{};{}M", column + 1, row + 1);
+    d.press("click past the end", report.as_bytes());
+    d.typed("D");
+    let screen = d.wait_text("w59 w60D");
+    d.capture("edited-by-clicks");
+    assert!(screen.contains("w06 Aw07 w08"), "{screen}");
+    assert!(screen.contains("w54 Bw55 w56"), "{screen}");
+    assert!(screen.contains("claude › Cw01 w02"), "{screen}");
+    assert!(
+        screen.contains("no sessions here"),
+        "a click started something:\n{screen}"
+    );
+    d.quit();
+}
+
+#[test]
+fn arrows_walk_the_rows_of_a_wrapped_draft_before_they_reach_the_list() {
+    let mut d = Dashboard::new("claude-composer-rows", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    d.start();
+    d.wait_text("✻ claude › ");
+    // Sixty words fill four rows; the cursor ends on the last one.
+    let draft: Vec<String> = (1..=60).map(|n| format!("w{n:02}")).collect();
+    d.typed(&draft.join(" "));
+    let screen = d.wait_text("w60");
+    assert!(selected(&screen).contains("no sessions here"), "{screen}");
+
+    // Up from the last row moves the cursor a row up and leaves the list alone.
+    d.press("up", UP);
+    d.typed("Q");
+    let screen = d.wait_text("Q");
+    assert!(line_of(&screen, "w40").contains('Q'), "{screen}");
+    assert!(selected(&screen).contains("no sessions here"), "{screen}");
+    d.press("up", UP);
+    d.press("up", UP);
+    d.typed("R");
+    let screen = d.wait_text("R");
+    assert!(line_of(&screen, "w05").contains('R'), "{screen}");
+    assert!(selected(&screen).contains("no sessions here"), "{screen}");
+    d.capture("cursor-on-first-row");
+
+    // Up on the first row belongs to the list. The cursor stays where it was, so typing
+    // still lands there.
+    d.press("up", UP);
+    let screen = d.wait_for("the selection to leave its row", |s| {
+        !s.contains("▌ no sessions here")
+    });
+    d.capture("list-moved");
+    d.typed("S");
+    let screen_typed = d.wait_text("RS");
+    assert!(
+        line_of(&screen_typed, "w05").contains("RS"),
+        "{screen_typed}"
+    );
+    // Down from the first row goes back into the draft, not down the list.
+    d.press("down", DOWN);
+    d.typed("T");
+    let after = d.wait_text("T");
+    assert!(line_of(&after, "w20").contains('T'), "{after}");
+    assert!(!after.contains("▌ no sessions here"), "{after}");
+    assert_eq!(
+        screen.lines().position(|l| l.contains('▌')),
+        after.lines().position(|l| l.contains('▌')),
+        "down moved the list:\n{after}"
+    );
+    d.capture("back-in-the-draft");
     d.quit();
 }

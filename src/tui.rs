@@ -2551,6 +2551,19 @@ fn breaks(line: Line<'static>) -> Text<'static> {
     Text::from(lines)
 }
 
+/// The wrapped row and column the block cursor is drawn at, before any scrolling.
+fn caret_cell(text: Text<'static>, width: u16) -> Option<(u16, u16)> {
+    let wrapped = Paragraph::new(text).wrap(Wrap { trim: false });
+    let area = Rect::new(0, 0, width, wrapped.line_count(width) as u16);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    ratatui::widgets::Widget::render(wrapped, area, &mut buf);
+    let at = buf
+        .content
+        .iter()
+        .position(|c| c.modifier.contains(Modifier::REVERSED))?;
+    Some(((at / width as usize) as u16, (at % width as usize) as u16))
+}
+
 fn rows_of(lines: Vec<Line<'static>>, width: u16) -> u16 {
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: false })
@@ -8977,6 +8990,9 @@ struct App {
     prespawned: Option<String>,
     /// Where the list rows were drawn last, so a click finds its row.
     list_area: Rect,
+    /// Where the composer was drawn last and how far it had scrolled, so a click finds its
+    /// character. None while the box shows anything else.
+    composer_box: Option<(Rect, u16)>,
 }
 
 const REST: Duration = Duration::from_millis(400);
@@ -9366,6 +9382,7 @@ impl App {
             rest: None,
             prespawned: None,
             list_area: Rect::default(),
+            composer_box: None,
         };
         app.update_attention();
         Ok(app)
@@ -13667,6 +13684,7 @@ impl App {
                 }
             }
         }
+        self.place_caret(ev);
         false
     }
 
@@ -16165,6 +16183,10 @@ impl App {
                             return Ok(true);
                         }
                     }
+                    // In a draft of several rows the arrows walk its rows first, as they do in
+                    // `claude agents`, and reach the list from its first and last row.
+                    KeyAction::Up if self.caret_row(false) => {}
+                    KeyAction::Down if self.caret_row(true) => {}
                     KeyAction::Up => self.step(-1),
                     KeyAction::Down => self.step(1),
                     KeyAction::PageUp | KeyAction::PageDown if self.history.visible => {
@@ -16312,6 +16334,7 @@ impl App {
         }
         let area = frame.area();
         self.size = (area.height, area.width);
+        self.composer_box = None;
         self.pane = self.pane(area);
         if self.split_active() {
             let [list, rule, _] = self.split_areas(area);
@@ -16613,6 +16636,87 @@ impl App {
         }
     }
 
+    /// Whether `mode_line` gives the box to the composer.
+    fn composing(&self) -> bool {
+        match &self.mode {
+            Mode::Normal => !self.history_selected(),
+            Mode::Pick(_) => true,
+            Mode::Config(f) => f.scope.is_some(),
+            _ => false,
+        }
+    }
+
+    /// Move the composer's cursor to the character drawn under a click.
+    fn place_caret(&mut self, ev: MouseEvent) {
+        let Some((area, scroll)) = self.composer_box else {
+            return;
+        };
+        if area.contains((ev.column, ev.row).into()) {
+            let row = (ev.row - area.y).saturating_sub(1) + scroll;
+            self.caret_to((row, ev.column - area.x), area.width);
+        }
+    }
+
+    /// Move the composer's cursor one wrapped row up or down, keeping its column. False on
+    /// the draft's first or last row, where the arrow belongs to the list.
+    fn caret_row(&mut self, down: bool) -> bool {
+        let Some((area, _)) = self.composer_box else {
+            return false;
+        };
+        if !self.composing() {
+            return false;
+        }
+        let Some((row, column)) = caret_cell(breaks(self.composer()), area.width) else {
+            return false;
+        };
+        let to = if down {
+            let (end, before) = (self.composer_text().len(), *self.composer_input_mut().1);
+            *self.composer_input_mut().1 = end;
+            let last = caret_cell(breaks(self.composer()), area.width);
+            *self.composer_input_mut().1 = before;
+            if last.is_none_or(|last| last.0 <= row) {
+                return false;
+            }
+            row + 1
+        } else if row == 0 {
+            return false;
+        } else {
+            row - 1
+        };
+        self.caret_to((to, column), area.width);
+        true
+    }
+
+    /// Put the composer's cursor on the character drawn at a wrapped row and column of a box
+    /// `width` wide: past the end of a row lands on that row's end, and left of its text on
+    /// its first character.
+    // ponytail: asks the wrapper that drew the box where each offset lands, a dozen
+    // off-screen layouts a move, rather than keeping a second copy of the wrap rules.
+    fn caret_to(&mut self, to: (u16, u16), width: u16) {
+        let text = self.composer_text();
+        let offsets: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain([text.len()])
+            .collect();
+        let before = *self.composer_input_mut().1;
+        let mut cell = |at: usize| {
+            *self.composer_input_mut().1 = at;
+            caret_cell(breaks(self.composer()), width)
+        };
+        let n = offsets.partition_point(|&at| cell(at).is_some_and(|c| c <= to));
+        let at = match n.checked_sub(1) {
+            // Nothing is at or before the target when the box draws no cursor at all.
+            None if cell(offsets[0]).is_none() => before,
+            None => offsets[0],
+            Some(last) if n < offsets.len() && cell(offsets[last]).is_some_and(|c| c.0 < to.0) => {
+                offsets[n]
+            }
+            Some(last) => offsets[last],
+        };
+        *self.composer_input_mut().1 = at;
+    }
+
     fn mode_line(&self) -> Line<'static> {
         match &self.mode {
             Mode::Normal if self.history_selected() => {
@@ -16653,7 +16757,8 @@ impl App {
         }
     }
 
-    fn framed(&self, line: impl Into<Text<'static>>, width: u16) -> (Paragraph<'static>, u16) {
+    /// The box, its height and the rows it has scrolled past.
+    fn framed(&self, line: impl Into<Text<'static>>, width: u16) -> (Paragraph<'static>, u16, u16) {
         let rules = Block::default()
             .borders(Borders::TOP | Borders::BOTTOM)
             .border_style(if self.quitting() {
@@ -16690,7 +16795,7 @@ impl App {
         // A draft taller than the box scrolls to the row the cursor is on, so what is typed stays
         // in view.
         let scroll = caret_rows(&text, width).saturating_sub(rows.saturating_sub(2));
-        (input.scroll((scroll, 0)), rows)
+        (input.scroll((scroll, 0)), rows, scroll)
     }
 
     fn draw_panel(&mut self, frame: &mut Frame, name: &str, pane: Rect) {
@@ -16703,7 +16808,7 @@ impl App {
                 Span::styled(*what, dim()),
             ])
         };
-        let (prompt, rows) = self.framed(breaks(line), pane.width);
+        let (prompt, rows, _) = self.framed(breaks(line), pane.width);
         // Reserve matching hint rows so the pane and composer prompts align.
         let [body, foot, hint] = Layout::vertical([
             Constraint::Min(1),
@@ -16789,7 +16894,7 @@ impl App {
             Mode::Config(form) if !in_pane && form.scope.is_none() => form.text(),
             _ => breaks(line),
         };
-        let (input, rows) = self.framed(text, area.width);
+        let (input, rows, scroll) = self.framed(text, area.width);
         let [head, list, prompt, foot] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(if self.two_line_footer() { 4 } else { 5 }),
@@ -16800,6 +16905,9 @@ impl App {
             ),
         ])
         .areas(area);
+        if in_pane || self.composing() {
+            self.composer_box = Some((prompt, scroll));
+        }
         frame.render_widget(
             Paragraph::new(header_lines(self.header_summary(), head.width as usize)),
             head,
