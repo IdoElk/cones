@@ -169,7 +169,9 @@ editor does not show this setting; `cones config set homes.codex '[~/dispatch/co
 writes it. A name may end in `*`, as in `/tmp/runs/codex-home.*`, for run directories that
 differ by a suffix. A live client whose home variable matches is listed under any `HOME`,
 by the [rules of detection](harness.md#discovery), and what finished runs left in matching
-directories is read as history. pi and the harnesses with no home variable refuse a pattern.
+directories is read as history. Every matching directory on disk is one more history source,
+with no cap or expiry, so a dispatcher that keeps its run directories should remove old ones
+or name a narrower pattern. pi and the harnesses with no home variable refuse a pattern.
 cones already reads the home of a live client started under your own `HOME`, so
 the list is for [sessions detection cannot see](harness.md#discovery).
 
