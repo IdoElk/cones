@@ -95,6 +95,11 @@ impl Fixture {
     /// A client whose command line starts with `name` itself, for a harness that reads its own
     /// arguments or is signalled by name: a script's interpreter would come first.
     fn named(&mut self, name: &str, args: &[&str], env: &[(&str, &Path)]) -> u32 {
+        self.scripted(name, args, env, "setTimeout(() => {}, 600000)")
+    }
+
+    /// `named`, running `script` under node.
+    fn scripted(&mut self, name: &str, args: &[&str], env: &[(&str, &Path)], script: &str) -> u32 {
         use std::os::unix::process::CommandExt;
         let mut command = Command::new("node");
         command
@@ -109,11 +114,7 @@ impl Fixture {
         // A dispatcher's run has no terminal, whatever the test was started from.
         super::stop::own_session(&mut command, false);
         let mut child = command.spawn().unwrap();
-        std::io::Write::write_all(
-            &mut child.stdin.take().unwrap(),
-            b"setTimeout(() => {}, 600000)",
-        )
-        .unwrap();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), script.as_bytes()).unwrap();
         let pid = child.id();
         self.children.push(child);
         pid
@@ -427,7 +428,9 @@ fn a_headless_codex_run_is_a_row_when_its_configured_home_is_spelled_differently
             "gpt-5",
             "-o",
             "last.txt",
-            "review the diff",
+            // A prompt after `--` is a prompt even when it starts like a subcommand.
+            "--",
+            "update the docs",
         ],
         &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
     );
@@ -441,7 +444,7 @@ fn a_headless_codex_run_is_a_row_when_its_configured_home_is_spelled_differently
     let rows = f.rows_when("codex", |row| row["pid"] == pid);
     let mine: Vec<_> = rows.iter().filter(|row| row["pid"] == pid).collect();
     assert_eq!(mine.len(), 1, "{rows:?}");
-    assert_eq!(mine[0]["title"], "review the diff", "{}", mine[0]);
+    assert_eq!(mine[0]["title"], "update the docs", "{}", mine[0]);
     // No rollout reports a model yet, so the one it was started with stands in.
     assert_eq!(mine[0]["model"], "gpt-5", "{}", mine[0]);
     assert_eq!(
@@ -618,4 +621,33 @@ fn a_headless_codex_run_in_a_configured_home_is_shown_and_stopped() {
         assert!(Instant::now() < deadline, "the stopped run is still alive");
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// An npm install runs Codex under a node wrapper that passes its arguments on, so the process
+/// table shows the client twice. The child is the client: one row, and it is the child's.
+#[test]
+fn an_npm_wrapper_and_the_client_it_runs_are_one_row() {
+    let mut f = Fixture::new();
+    let user = f.path().to_owned();
+    fs::create_dir_all(f.path().join(".codex")).unwrap();
+    // The child leaves with its wrapper, which the fixture ends.
+    let wrapper = f.scripted(
+        "codex",
+        &["exec", "review the wrapper"],
+        &[("HOME", &user)],
+        r#"const child = require("child_process").spawn(process.execPath, ["-", ...process.argv.slice(2)],
+            { argv0: "codex", stdio: ["pipe", "ignore", "ignore"] });
+        child.stdin.end("setInterval(() => process.ppid === 1 && process.exit(), 200)");
+        setTimeout(() => {}, 600000)"#,
+    );
+    // Both processes are in the table before either row is judged.
+    let rows = f.rows_when("codex", |row| {
+        row["title"] == "review the wrapper" && row["pid"] != wrapper
+    });
+    let mine: Vec<_> = rows
+        .iter()
+        .filter(|r| r["title"] == "review the wrapper")
+        .collect();
+    assert_eq!(mine.len(), 1, "{rows:?}");
+    assert_ne!(mine[0]["pid"], wrapper, "{}", mine[0]);
 }

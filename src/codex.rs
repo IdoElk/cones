@@ -245,6 +245,17 @@ pub fn sessions_from(ps: &str, codex: &Path) -> anyhow::Result<Vec<Session>> {
         &procs.iter().map(|p| p.pid).collect::<Vec<_>>(),
     );
     procs.retain(|p| own.contains(&p.pid));
+    // An npm install runs the client under a node wrapper with the same arguments: the child is
+    // the client, and two rows in one folder would leave its rollout to neither.
+    #[cfg(target_os = "macos")]
+    {
+        let key = |p: &Process| (p.remote, p.thread.clone(), p.prompt.clone());
+        let wrappers: Vec<(u32, _)> = procs
+            .iter()
+            .filter_map(|p| Some((crate::process_info::parent(p.pid)?, key(p))))
+            .collect();
+        procs.retain(|p| !wrappers.contains(&(p.pid, key(p))));
+    }
     #[cfg(target_os = "macos")]
     for p in &mut procs {
         p.cwd = crate::process_info::cwd(p.pid);
@@ -292,12 +303,14 @@ pub fn processes(ps: &str) -> Vec<Process> {
                 .take(2)
                 .position(|w| Path::new(w).file_name().and_then(|n| n.to_str()) == program)
                 .unwrap_or(0);
-            let (remote, thread, prompt) =
+            let (remote, thread, prompt, bare) =
                 client_options(line.command.split_whitespace().skip(own + 1));
             // Global options can precede a subcommand: editor extensions run
-            // `codex -c key=value app-server`, which the first-word filter lets through.
+            // `codex -c key=value app-server`, which the first-word filter lets through. Words
+            // after `exec` or `--` are a prompt, whatever it starts with.
             let first = prompt.as_deref().and_then(|p| p.split_whitespace().next());
             if thread.is_none()
+                && bare
                 && first.is_some_and(|w| discovery.exclude_subcommands.iter().any(|e| e == w))
             {
                 return None;
@@ -334,9 +347,10 @@ pub fn launched_model(command: &str) -> Option<String> {
 
 /// Stop parsing options at the prompt so its text cannot identify a client or thread, and
 /// return the prompt itself: until the daemon makes the thread, it is all the row can say.
+/// The last value says whether the prompt's first word sits where a subcommand would.
 fn client_options<'a>(
     mut args: impl Iterator<Item = &'a str>,
-) -> (bool, Option<String>, Option<String>) {
+) -> (bool, Option<String>, Option<String>, bool) {
     /// `ps` keeps a multi-line prompt on one line and spells its breaks out: a newline prints as
     /// the four characters `\012` and a carriage return as `^M`. Words either side of a break are
     /// not neighbours, so take the first line and say that it was cut rather than glue the halves.
@@ -390,8 +404,8 @@ fn client_options<'a>(
             "--" => {
                 let next = args.next();
                 return match next.filter(|a| resume && is_thread(a)) {
-                    Some(id) => (remote, Some(id.to_owned()), rest(args)),
-                    None => (remote, None, rest(next.into_iter().chain(args))),
+                    Some(id) => (remote, Some(id.to_owned()), rest(args), false),
+                    None => (remote, None, rest(next.into_iter().chain(args)), false),
                 };
             }
             "resume" if !resume => resume = true,
@@ -406,11 +420,11 @@ fn client_options<'a>(
                 } else {
                     rest(std::iter::once(arg).chain(args))
                 };
-                return (remote, thread, prompt);
+                return (remote, thread, prompt, !exec);
             }
         }
     }
-    (remote, None, None)
+    (remote, None, None, false)
 }
 
 /// Working directory per pid from `lsof -a -p <pids> -d cwd -Fn`: a `p<pid>` line, then
@@ -1414,7 +1428,8 @@ mod tests {
             (
                 true,
                 None,
-                Some("explain resume 01a0a430-b8d1-7682-a7ed-51904a118c65".into())
+                Some("explain resume 01a0a430-b8d1-7682-a7ed-51904a118c65".into()),
+                true
             ),
             "a prompt that says resume is still the prompt"
         );
@@ -1436,7 +1451,8 @@ mod tests {
             (
                 true,
                 Some("01a0a430-b8d1-7682-a7ed-51904a118c65".into()),
-                Some("fix this".into())
+                Some("fix this".into()),
+                true
             ),
             "a resumed thread names itself before its prompt"
         );
