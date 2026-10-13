@@ -144,7 +144,12 @@ fn ls_scopes_runs_and_sessions_to_a_folder_and_its_worktrees() {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
-        String::from_utf8(out.stdout).unwrap()
+        // Text rows name their columns beside the rows, never among them.
+        let named = String::from_utf8_lossy(&out.stderr).contains("cost\treason or tokens");
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(named, !args.contains(&"--json"), "{args:?}");
+        assert!(!text.contains("reason or tokens"), "{text}");
+        text
     };
     let all = run(&["ls"]);
     for row in ["mine", "theirs", "in-worktree", "elsewhere"] {

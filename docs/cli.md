@@ -41,7 +41,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 
 ### Reading runs and sessions
 
-`cones ls` prints the dashboard's rows for a script: the ledger's runs, then the live sessions no run owns. Text timestamps use your local timezone and include its UTC offset. `--job` and `--status` narrow the read; naming a job leaves the sessions out, since a session belongs to no job.
+`cones ls` prints the dashboard's rows for a script: the ledger's runs, then the live sessions no run owns. Text rows are tab-separated: id, job or folder, status, start time, harness, cost, then a run's reason or a session's tokens. The column names go to stderr, so stdout is rows only, and the model is in `--json`. Text timestamps use your local timezone and include its UTC offset. `--job` and `--status` narrow the read; naming a job leaves the sessions out, since a session belongs to no job.
 
 `--dir` keeps the rows whose folder is that path or sits under it. This includes worktrees stored inside the directory; linked worktrees elsewhere are not included merely because they share a repository. Both sides are resolved first, so a folder reached through a symlink still matches. A row that reports no folder is not in any folder, so a scoped read leaves it out.
 

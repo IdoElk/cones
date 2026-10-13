@@ -631,6 +631,11 @@ fn execute(cli: Cli) -> Result<i32> {
                     p == *scope || p.starts_with(scope)
                 }
             };
+            // The columns are named on stderr: a person or an agent reading the rows sees which
+            // is which, and a script cutting fields from stdout gets rows only.
+            if !json {
+                eprintln!("id\tjob or folder\tstatus\tstarted\tharness\tcost\treason or tokens");
+            }
             for run in ledger.runs()?.into_iter().rev().filter(|r| {
                 job.as_ref()
                     .is_none_or(|j| r.started.job.as_ref() == Some(j))
