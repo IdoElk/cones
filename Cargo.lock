@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "cones"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "anyhow",
  "candle-core",
