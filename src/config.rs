@@ -982,6 +982,11 @@ fn home_path(kind: HarnessKind, home: &str) -> Result<PathBuf> {
         home.starts_with('/') || home.starts_with('~'),
         "homes.{kind}: {home}: an absolute path, or one under ~"
     );
+    // A trailing `*` is the one pattern: run directories that differ by a suffix.
+    ensure!(
+        !home.trim_end_matches('*').contains('*') && !home.ends_with("**") && !home.ends_with("/*"),
+        "homes.{kind}: {home}: `*` is accepted only once, ending the directory's name"
+    );
     expand_path(Path::new(home), Path::new("/")).with_context(|| format!("homes.{kind}"))
 }
 

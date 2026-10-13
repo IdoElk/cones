@@ -388,3 +388,87 @@ fn an_opencode_client_in_another_data_home_is_a_row_with_its_session() {
         mine[0]
     );
 }
+
+/// A headless `codex exec` run by a dispatcher has its own HOME and a home under a temporary
+/// directory, which macOS keeps behind a symlink: the client names one spelling and the
+/// configuration the other. It is still a row, titled by its prompt and not by its subcommand.
+#[test]
+fn a_headless_codex_run_is_a_row_when_its_configured_home_is_spelled_differently() {
+    let mut f = Fixture::new();
+    let task = f.path().join("task-codex");
+    let elsewhere = f.path().join("elsewhere");
+    for dir in [&task, &elsewhere] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let real = task.canonicalize().unwrap();
+    assert_ne!(real, task, "the fixture root is not behind a symlink");
+    let pid = f.stand_in(
+        "codex",
+        &["exec", "--json", "-o", "last.txt", "review the diff"],
+        &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
+    );
+    f.ok(&[
+        "config",
+        "set",
+        "homes.codex",
+        &format!("[\"{}\"]", real.display()),
+    ]);
+
+    let rows = f.rows_when("codex", |row| row["pid"] == pid);
+    let mine: Vec<_> = rows.iter().filter(|row| row["pid"] == pid).collect();
+    assert_eq!(mine.len(), 1, "{rows:?}");
+    assert_eq!(mine[0]["title"], "review the diff", "{}", mine[0]);
+    assert_eq!(
+        mine[0]["cwd"].as_str().map(PathBuf::from),
+        f.path().canonicalize().ok(),
+        "{}",
+        mine[0]
+    );
+}
+
+/// A dispatcher gives each run a home with a random suffix, so no fixed list can name it. A
+/// `homes` entry ending in `*` names them all: a live client in a matching home is a row
+/// under any HOME, and one in a home that does not match stays another fleet's.
+#[test]
+fn a_homes_pattern_lists_live_clients_in_run_directories() {
+    let mut f = Fixture::new();
+    let elsewhere = f.path().join("elsewhere");
+    let (seat, stray) = (f.path().join("seat.run1.x7"), f.path().join("other.run1"));
+    for dir in [&elsewhere, &seat, &stray] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let args = ["exec", "review the diff"];
+    let mine = f.stand_in(
+        "codex",
+        &args,
+        &[("HOME", &elsewhere), ("CODEX_HOME", &seat)],
+    );
+    let theirs = f.stand_in(
+        "codex",
+        &args,
+        &[("HOME", &elsewhere), ("CODEX_HOME", &stray)],
+    );
+    let pattern = f.path().canonicalize().unwrap().join("seat.*");
+    f.ok(&[
+        "config",
+        "set",
+        "homes.codex",
+        &format!("[\"{}\"]", pattern.display()),
+    ]);
+
+    let rows = f.rows_when("codex", |row| row["pid"] == mine);
+    assert!(rows.iter().any(|row| row["pid"] == mine), "{rows:?}");
+    assert_eq!(
+        rows.iter().find(|r| r["pid"] == mine).unwrap()["title"],
+        "review the diff"
+    );
+    // By now the other client's environment is readable too, and it is still not listed.
+    std::thread::sleep(Duration::from_secs(1));
+    let rows = f.rows_when("codex", |row| row["pid"] == mine);
+    assert!(rows.iter().all(|row| row["pid"] != theirs), "{rows:?}");
+
+    for refused in ["[/tmp/*/seat]", "[/tmp/seat.**]", "[/tmp/*]"] {
+        let out = f.cones(&["config", "set", "homes.codex", refused]);
+        assert!(!out.status.success(), "{refused} was accepted");
+    }
+}

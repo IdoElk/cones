@@ -1467,7 +1467,15 @@ fn env_value<'a>(env: &'a str, name: &str) -> Option<&'a str> {
 #[derive(Default)]
 struct Extra {
     configured: Vec<PathBuf>,
+    /// Configured names ending in `*`, as the directory and the start of the name.
+    patterns: Vec<(PathBuf, String)>,
     detected: Vec<PathBuf>,
+}
+
+/// A home is its directory, however a path spells it: a client names `/var/folders/…` while
+/// configuration, or the harness's own records, name the same place under `/private`.
+pub fn real(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
 static EXTRA: std::sync::RwLock<BTreeMap<String, Extra>> = std::sync::RwLock::new(BTreeMap::new());
@@ -1477,9 +1485,17 @@ pub fn configure_homes(homes: &BTreeMap<HarnessKind, Vec<PathBuf>>) {
     let mut extra = EXTRA.write().unwrap_or_else(|e| e.into_inner());
     for entry in extra.values_mut() {
         entry.configured.clear();
+        entry.patterns.clear();
     }
     for (kind, paths) in homes {
-        extra.entry(kind.to_string()).or_default().configured = paths.clone();
+        let entry = extra.entry(kind.to_string()).or_default();
+        for path in paths {
+            let name = path.file_name().and_then(OsStr::to_str);
+            match (path.parent(), name.and_then(|n| n.strip_suffix('*'))) {
+                (Some(dir), Some(start)) => entry.patterns.push((real(dir), start.to_owned())),
+                _ => entry.configured.push(path.clone()),
+            }
+        }
     }
 }
 
@@ -1507,6 +1523,19 @@ impl Home {
         (Path::new(env_value(env, "HOME")?) == user)
             .then(|| self.of_process(env))
             .flatten()
+    }
+
+    /// `of_process` for a client whose home a `homes` pattern names, whatever its `HOME`: a
+    /// dispatcher's run directory, read while the client lives and never searched for on disk.
+    pub fn of_pattern(&self, env: &str) -> Option<PathBuf> {
+        let home = self.of_process(env)?;
+        let (dir, name) = (real(home.parent()?), home.file_name()?.to_str()?);
+        let extra = EXTRA.read().unwrap_or_else(|e| e.into_inner());
+        let patterns = &extra.get(&self.name)?.patterns;
+        let matched = patterns
+            .iter()
+            .any(|(d, start)| *d == dir && name.starts_with(start));
+        matched.then_some(home)
     }
 
     /// The home a process runs against, read from its own environment as `ps` prints it:

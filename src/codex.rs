@@ -284,7 +284,16 @@ pub fn processes(ps: &str) -> Vec<Process> {
         .processes(ps)
         .into_iter()
         .filter_map(|line| {
-            let (remote, thread, prompt) = client_options(line.command.split_whitespace().skip(1));
+            // An interpreter names the client as its first argument; options follow the client.
+            let program = discovery.process.as_deref();
+            let own = line
+                .command
+                .split_whitespace()
+                .take(2)
+                .position(|w| Path::new(w).file_name().and_then(|n| n.to_str()) == program)
+                .unwrap_or(0);
+            let (remote, thread, prompt) =
+                client_options(line.command.split_whitespace().skip(own + 1));
             // Global options can precede a subcommand: editor extensions run
             // `codex -c key=value app-server`, which the first-word filter lets through.
             let first = prompt.as_deref().and_then(|p| p.split_whitespace().next());
@@ -328,6 +337,7 @@ fn client_options<'a>(
     }
     let mut remote = false;
     let mut resume = false;
+    let mut exec = false;
     while let Some(arg) = args.next() {
         match arg {
             "--remote" => remote = args.next().is_some(),
@@ -350,7 +360,12 @@ fn client_options<'a>(
             | "--cd"
             | "--add-dir"
             | "-a"
-            | "--ask-for-approval" => {
+            | "--ask-for-approval"
+            | "--thread-source"
+            | "--output-schema"
+            | "--color"
+            | "-o"
+            | "--output-last-message" => {
                 args.next();
             }
             // A separator does not hide the thread: `resume -- <id>` is how this dashboard joins one.
@@ -362,6 +377,8 @@ fn client_options<'a>(
                 };
             }
             "resume" if !resume => resume = true,
+            // A headless run names its subcommand before the prompt, which is not part of it.
+            "exec" | "e" if !exec && !resume => exec = true,
             _ if arg.starts_with('-') => {}
             _ => {
                 let thread = (resume && is_thread(arg)).then(|| arg.to_owned());

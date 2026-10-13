@@ -451,8 +451,11 @@ pub fn own_home_processes(
     let Ok(read) = claude_dir().map(|dir| home.all(&dir)) else {
         return pids.iter().copied().collect();
     };
+    let real = crate::harness::spec::real;
+    let read: Vec<PathBuf> = read.iter().map(|p| real(p)).collect();
+    let of = &real(of);
     // A home outside the set, which only a caller naming its own root passes, is read alone.
-    let alone = !read.contains(&of.to_owned());
+    let alone = !read.contains(of);
     let list = pids
         .iter()
         .map(u32::to_string)
@@ -474,7 +477,10 @@ pub fn own_home_processes(
                     None => Utc::now() - *started >= HIDDEN_ENVIRONMENT_WAIT,
                     Some(env) => match home.of_process(env) {
                         None => true,
-                        Some(used) => read.contains(&used) && (alone || used == of),
+                        Some(used) => {
+                            let used = real(&used);
+                            read.contains(&used) && (alone || used == *of)
+                        }
                     },
                 },
             }
@@ -530,7 +536,8 @@ pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
         }
         seen.insert(*key);
         let home = &crate::harness::spec(key.0).home;
-        if let Some(found) = env.and_then(|env| home.of_peer(env, &user)) {
+        let named = |env| home.of_peer(env, &user).or_else(|| home.of_pattern(env));
+        if let Some(found) = env.and_then(named) {
             home.detected(found);
         }
     }
