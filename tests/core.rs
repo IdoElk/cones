@@ -881,6 +881,7 @@ fn a_skip_flag_on_the_command_line_marks_a_session_that_reports_no_mode() {
     )
     .unwrap();
     fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    let claude = dir.path().join(".claude");
     struct Kill(Vec<std::process::Child>);
     impl Drop for Kill {
         fn drop(&mut self) {
@@ -891,9 +892,12 @@ fn a_skip_flag_on_the_command_line_marks_a_session_that_reports_no_mode() {
         }
     }
     let spawn = |args: &[&str]| {
+        // The fixture's home, or every dashboard on this machine lists the stand-ins.
         std::process::Command::new(&program)
             .args(args)
             .current_dir(dir.path())
+            .env("HOME", dir.path())
+            .env("CLAUDE_CONFIG_DIR", &claude)
             .spawn()
             .unwrap()
     };
@@ -903,15 +907,32 @@ fn a_skip_flag_on_the_command_line_marks_a_session_that_reports_no_mode() {
         spawn(&["--", "--yolo"]),
     ]);
     let pids: Vec<u32> = children.0.iter().map(|c| c.id()).collect();
-    let claude = dir.path().join(".claude");
+    let list = || -> Vec<serde_json::Value> {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_cones"))
+            .args(["--jobs", dir.path().join("jobs.yaml").to_str().unwrap()])
+            .args(["--state-dir", dir.path().to_str().unwrap(), "ls", "--json"])
+            .env("HOME", dir.path())
+            .env("CLAUDE_CONFIG_DIR", &claude)
+            .env("CODEX_HOME", dir.path().join("missing-codex"))
+            .env("PI_CODING_AGENT_DIR", dir.path().join("missing-pi"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["session"].clone())
+            .filter(|s| pids.iter().any(|p| s["pid"] == *p))
+            .collect()
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let rows = loop {
         // The python shim hides a fresh fixture's environment for its first seconds.
-        let rows: Vec<_> = cones::fleet::all(&claude)
-            .unwrap()
-            .into_iter()
-            .filter(|s| s.pid.is_some_and(|p| pids.contains(&p)))
-            .collect();
+        let rows = list();
         if rows.len() == pids.len() || std::time::Instant::now() > deadline {
             break rows;
         }
@@ -922,10 +943,10 @@ fn a_skip_flag_on_the_command_line_marks_a_session_that_reports_no_mode() {
         .map(|pid| {
             let row = rows
                 .iter()
-                .find(|s| s.pid == Some(*pid))
+                .find(|s| s["pid"] == *pid)
                 .unwrap_or_else(|| panic!("gemini {pid} never listed: {rows:?}"));
-            assert_eq!(row.harness, "gemini");
-            (*pid, row.bypass)
+            assert_eq!(row["harness"], "gemini");
+            (*pid, row["bypass"].as_bool())
         })
         .collect();
     assert_eq!(
