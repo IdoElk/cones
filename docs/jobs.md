@@ -166,9 +166,11 @@ is the directory the harness's home variable would name, such as `CLAUDE_CONFIG_
 `CODEX_HOME`, absolute or under `~`; a path through a symlink names the same home. Sessions there are listed, read and controlled like any
 other; a directory that does not exist yet is skipped until it does. The dashboard's config
 editor does not show this setting; `cones config set homes.codex '[~/dispatch/codex-home]'`
-writes it. A name may end in `*`, as in `/tmp/seats/codex-home.*`, for run directories that
-differ by a suffix: a matching home is read while a client is live in it, under any `HOME`,
-and its finished sessions are not listed. cones already reads the home of a live client started under your own `HOME`, so
+writes it. A name may end in `*`, as in `/tmp/runs/codex-home.*`, for run directories that
+differ by a suffix. A live client whose home variable matches is listed under any `HOME`,
+by the [rules of detection](harness.md#discovery), and what finished runs left in matching
+directories is read as history. pi and the harnesses with no home variable refuse a pattern.
+cones already reads the home of a live client started under your own `HOME`, so
 the list is for [sessions detection cannot see](harness.md#discovery).
 
 ## Pane

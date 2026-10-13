@@ -92,6 +92,51 @@ impl Fixture {
         pid
     }
 
+    /// A client whose command line starts with `name` itself, for a harness that reads its own
+    /// arguments or is signalled by name: a script's interpreter would come first.
+    fn named(&mut self, name: &str, args: &[&str], env: &[(&str, &Path)]) -> u32 {
+        use std::os::unix::process::CommandExt;
+        let mut command = Command::new("node");
+        command
+            .arg0(name)
+            .arg("-")
+            .args(args)
+            .current_dir(self.path().canonicalize().unwrap())
+            .stdin(Stdio::piped());
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().unwrap();
+        std::io::Write::write_all(
+            &mut child.stdin.take().unwrap(),
+            b"setTimeout(() => {}, 600000)",
+        )
+        .unwrap();
+        let pid = child.id();
+        self.children.push(child);
+        pid
+    }
+
+    /// An OpenCode client under `user`'s HOME showing the fixture session, which the database
+    /// under `data` holds. Returns its pid and that database.
+    fn opencode(&mut self, user: &Path, data: &Path) -> (u32, PathBuf) {
+        let cwd = self.path().canonicalize().unwrap();
+        fs::create_dir_all(data.join("opencode")).unwrap();
+        let db = data.join("opencode/opencode.db");
+        let sql = include_str!("../assets/harnesses/fixtures/opencode.sql")
+            .replace("/fixture", &cwd.to_string_lossy());
+        let mut sqlite = Command::new("sqlite3")
+            .arg(&db)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(sqlite.stdin.as_mut().unwrap(), sql.as_bytes()).unwrap();
+        assert!(sqlite.wait().unwrap().success());
+        let env = [("HOME", user), ("XDG_DATA_HOME", data)];
+        let pid = self.named("opencode", &["--session", "ses_fixture"], &env);
+        (pid, db)
+    }
+
     /// The rows `cones ls` reports for `harness`, once one of them satisfies `ready`. The
     /// python3 shim hides a stand-in's environment until it re-executes the real interpreter.
     fn rows_when(&self, harness: &str, ready: impl Fn(&Value) -> bool) -> Vec<Value> {
@@ -341,39 +386,8 @@ fn a_pi_client_in_another_home_is_a_row_with_its_conversation() {
 fn an_opencode_client_in_another_data_home_is_a_row_with_its_session() {
     let mut f = Fixture::new();
     let data = f.path().join("task-xdg");
-    let cwd = f.path().canonicalize().unwrap();
-    fs::create_dir_all(data.join("opencode")).unwrap();
-    let db = data.join("opencode/opencode.db");
-    let sql = include_str!("../assets/harnesses/fixtures/opencode.sql")
-        .replace("/fixture", &cwd.to_string_lossy());
-    let mut sqlite = Command::new("sqlite3")
-        .arg(&db)
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    std::io::Write::write_all(sqlite.stdin.as_mut().unwrap(), sql.as_bytes()).unwrap();
-    assert!(sqlite.wait().unwrap().success());
-    // OpenCode reads `--session` from its own arguments, so the stand-in must be named
-    // opencode itself: a script's interpreter would come first on the command line.
-    let mut client = {
-        use std::os::unix::process::CommandExt;
-        Command::new("node")
-            .arg0("opencode")
-            .args(["-", "--session", "ses_fixture"])
-            .current_dir(&cwd)
-            .env("HOME", f.path())
-            .env("XDG_DATA_HOME", &data)
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap()
-    };
-    std::io::Write::write_all(
-        &mut client.stdin.take().unwrap(),
-        b"setTimeout(() => {}, 600000)",
-    )
-    .unwrap();
-    let pid = client.id();
-    f.children.push(client);
+    let user = f.path().to_owned();
+    let (pid, db) = f.opencode(&user, &data);
 
     let rows = f.rows_when("opencode", |row| {
         row["pid"] == pid && row["title"].is_string()
@@ -433,42 +447,161 @@ fn a_headless_codex_run_is_a_row_when_its_configured_home_is_spelled_differently
 fn a_homes_pattern_lists_live_clients_in_run_directories() {
     let mut f = Fixture::new();
     let elsewhere = f.path().join("elsewhere");
-    let (seat, stray) = (f.path().join("seat.run1.x7"), f.path().join("other.run1"));
-    for dir in [&elsewhere, &seat, &stray] {
+    let (run, stray) = (f.path().join("run.1.x7"), f.path().join("other.1"));
+    for dir in [&elsewhere, &run, &stray] {
         fs::create_dir_all(dir).unwrap();
     }
     let args = ["exec", "review the diff"];
     let mine = f.stand_in(
         "codex",
         &args,
-        &[("HOME", &elsewhere), ("CODEX_HOME", &seat)],
+        &[("HOME", &elsewhere), ("CODEX_HOME", &run)],
     );
     let theirs = f.stand_in(
         "codex",
         &args,
         &[("HOME", &elsewhere), ("CODEX_HOME", &stray)],
     );
-    let pattern = f.path().canonicalize().unwrap().join("seat.*");
-    f.ok(&[
-        "config",
-        "set",
-        "homes.codex",
-        &format!("[\"{}\"]", pattern.display()),
-    ]);
+    let claude = f.client(&elsewhere, &run);
+    f.session(&run, TASK, "interactive", claude, "rotate the staging keys");
+    let (opencode, db) = f.opencode(&elsewhere, &run);
+
+    let pattern = format!(
+        "[\"{}\"]",
+        f.path().canonicalize().unwrap().join("run.*").display()
+    );
+    for harness in ["codex", "claude", "opencode"] {
+        f.ok(&["config", "set", &format!("homes.{harness}"), &pattern]);
+    }
 
     let rows = f.rows_when("codex", |row| row["pid"] == mine);
-    assert!(rows.iter().any(|row| row["pid"] == mine), "{rows:?}");
+    let row = rows
+        .iter()
+        .find(|r| r["pid"] == mine)
+        .expect("no codex row");
+    assert_eq!(row["title"], "review the diff", "{row}");
+    let rows = f.rows_when("claude", |row| row["pid"] == claude);
+    assert_eq!(ids(&rows), [TASK]);
+    assert_eq!(rows[0]["title"], "rotate the staging keys", "{}", rows[0]);
+    let rows = f.rows_when("opencode", |row| {
+        row["pid"] == opencode && row["title"].is_string()
+    });
+    let row = rows
+        .iter()
+        .find(|r| r["pid"] == opencode)
+        .expect("no opencode row");
+    assert_eq!(row["title"], "Named OpenCode", "{row}");
     assert_eq!(
-        rows.iter().find(|r| r["pid"] == mine).unwrap()["title"],
-        "review the diff"
+        row["transcript_path"].as_str().map(PathBuf::from),
+        Some(db),
+        "{row}"
     );
     // By now the other client's environment is readable too, and it is still not listed.
     std::thread::sleep(Duration::from_secs(1));
     let rows = f.rows_when("codex", |row| row["pid"] == mine);
     assert!(rows.iter().all(|row| row["pid"] != theirs), "{rows:?}");
 
-    for refused in ["[/tmp/*/seat]", "[/tmp/seat.**]", "[/tmp/*]"] {
-        let out = f.cones(&["config", "set", "homes.codex", refused]);
-        assert!(!out.status.success(), "{refused} was accepted");
+    for (key, refused) in [
+        ("homes.codex", "[/tmp/*/run]"),
+        ("homes.codex", "[/tmp/run.**]"),
+        ("homes.codex", "[/tmp/*]"),
+        // pi hides its environment and gemini has no home variable: nothing to match.
+        ("homes.pi", "[/tmp/run.*]"),
+        ("homes.gemini", "[/tmp/run.*]"),
+    ] {
+        let out = f.cones(&["config", "set", key, refused]);
+        assert!(!out.status.success(), "{key} {refused} was accepted");
     }
+}
+
+/// What a finished run left in a directory a pattern names is still read: no client is live
+/// there, and `cones show` prints the conversation.
+#[test]
+fn a_finished_run_in_a_pattern_home_is_read_as_history() {
+    let mut f = Fixture::new();
+    let run = f.path().join("run.2.k3");
+    let gone = f.bystander();
+    f.session(&run, TASK, "interactive", gone, "rotate the staging keys");
+    fs::remove_dir_all(run.join("sessions")).unwrap();
+    assert!(
+        !f.cones(&["show", TASK]).status.success(),
+        "read with no pattern"
+    );
+
+    let pattern = format!("[\"{}\"]", f.path().join("run.*").display());
+    f.ok(&["config", "set", "homes.claude", &pattern]);
+    assert_eq!(
+        ids(&f.sessions()),
+        [] as [&str; 0],
+        "a finished run is not a live row"
+    );
+    let shown = f.ok(&["show", TASK]);
+    assert!(shown.contains("rotate the staging keys"), "{shown}");
+}
+
+/// A headless Codex run in a configured home is read and controlled there: the row carries
+/// what its rollout reports, `cones show` prints the conversation, and a stop is refused.
+#[test]
+fn a_headless_codex_run_in_a_configured_home_is_shown_and_not_stopped() {
+    let mut f = Fixture::new();
+    let (task, elsewhere) = (f.path().join("task-codex"), f.path().join("elsewhere"));
+    let cwd = f.path().canonicalize().unwrap();
+    let day = task.join("sessions/2026/10/13");
+    for dir in [&day, &elsewhere] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let pid = f.named(
+        "codex",
+        &["exec", "review the diff"],
+        &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
+    );
+    let at = |secs| {
+        (chrono::Utc::now() + chrono::TimeDelta::seconds(secs))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    };
+    let lines = [
+        json!({"timestamp": at(1), "type": "session_meta", "payload": {"session_id": OTHER, "id": OTHER, "timestamp": at(1), "cwd": cwd, "originator": "codex_exec"}}),
+        json!({"timestamp": at(2), "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}),
+        json!({"timestamp": at(2), "type": "turn_context", "payload": {"turn_id": "t1", "cwd": cwd, "model": "gpt-5"}}),
+        json!({"timestamp": at(2), "type": "event_msg", "payload": {"type": "user_message", "message": "review the diff"}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(
+        day.join(format!("rollout-2026-10-13T12-00-00-{OTHER}.jsonl")),
+        text,
+    )
+    .unwrap();
+    f.ok(&[
+        "config",
+        "set",
+        "homes.codex",
+        &format!("[\"{}\"]", task.display()),
+    ]);
+
+    let rows = f.rows_when("codex", |row| row["pid"] == pid);
+    let row = rows.iter().find(|r| r["pid"] == pid).expect("no codex row");
+    assert_eq!(row["session_id"], OTHER, "{row}");
+    assert_eq!(row["state"], "active", "{row}");
+    assert_eq!(row["model"], "gpt-5", "{row}");
+    assert_eq!(row["title"], "review the diff", "{row}");
+
+    let shown = f.ok(&["show", OTHER]);
+    assert!(shown.contains("review the diff"), "{shown}");
+
+    // The dispatcher owns the run: cones reads it and declines to end it.
+    let out = f.cones(&["stop", OTHER]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a run cones does not own was stopped"
+    );
+    assert!(
+        said.contains("runs in a terminal cones does not own"),
+        "{said}"
+    );
+    let child = f.children.last_mut().unwrap();
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the refused stop ended the run"
+    );
 }

@@ -987,6 +987,12 @@ fn home_path(kind: HarnessKind, home: &str) -> Result<PathBuf> {
         !home.trim_end_matches('*').contains('*') && !home.ends_with("**") && !home.ends_with("/*"),
         "homes.{kind}: {home}: `*` is accepted only once, ending the directory's name"
     );
+    // A pattern is matched against the home variable in a live client's environment.
+    ensure!(
+        !home.ends_with('*')
+            || (kind != HarnessKind::Pi && !crate::harness::spec(kind).home.env.is_empty()),
+        "homes.{kind}: {home}: {kind} does not show the home it runs against, so `*` cannot match it; name each directory"
+    );
     expand_path(Path::new(home), Path::new("/")).with_context(|| format!("homes.{kind}"))
 }
 

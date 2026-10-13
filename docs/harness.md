@@ -36,7 +36,9 @@ another fleet and is not listed. A client whose environment cannot be read is of
 every home of its harness: the one holding its conversation names it, and otherwise it is a
 bare process row. An environment hidden by macOS keeps a process out for its first ten
 seconds. pi hides its environment once it starts, so a pi home is never detected and has to
-be configured. Reading another home starts nothing in it.
+be configured. A [`homes` name ending in `*`](jobs.md#homes) is detection too: it is off
+under the same overrides, and it needs the client's environment, so pi refuses one. Reading
+another home starts nothing in it.
 
 Checked against live clients in a second home, with no model call: Codex 0.162.1 (listed,
 read, noted and stopped through that home's daemon), pi (configured home; listed and read)

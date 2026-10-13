@@ -273,14 +273,17 @@ pub fn sources(claude: &Path) -> Vec<Source> {
     harness::known()
         .iter()
         .flat_map(|&kind| {
-            harness::spec(kind)
-                .home
-                .all(claude)
-                .into_iter()
-                .map(move |home| Source {
-                    harness: kind,
-                    home,
-                })
+            let home = &harness::spec(kind).home;
+            let mut homes = home.all(claude);
+            for found in home.matching() {
+                if !homes.contains(&found) {
+                    homes.push(found);
+                }
+            }
+            homes.into_iter().map(move |home| Source {
+                harness: kind,
+                home,
+            })
         })
         .collect()
 }

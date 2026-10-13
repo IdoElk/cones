@@ -1525,17 +1525,43 @@ impl Home {
             .flatten()
     }
 
-    /// `of_process` for a client whose home a `homes` pattern names, whatever its `HOME`: a
-    /// dispatcher's run directory, read while the client lives and never searched for on disk.
+    /// `of_process` for a client whose home variable a `homes` pattern names, whatever its
+    /// `HOME`: a dispatcher's run directory, read while the client lives.
     pub fn of_pattern(&self, env: &str) -> Option<PathBuf> {
-        let home = self.of_process(env)?;
-        let (dir, name) = (real(home.parent()?), home.file_name()?.to_str()?);
+        let named = Path::new(env_value(env, &self.env)?);
+        let (dir, name) = (real(named.parent()?), named.file_name()?.to_str()?);
         let extra = EXTRA.read().unwrap_or_else(|e| e.into_inner());
         let patterns = &extra.get(&self.name)?.patterns;
         let matched = patterns
             .iter()
             .any(|(d, start)| *d == dir && name.starts_with(start));
-        matched.then_some(home)
+        matched.then(|| self.of_process(env)).flatten()
+    }
+
+    /// The homes on disk a `homes` pattern names, for reading what finished runs left there.
+    // ponytail: every match is a history source; cap or expire them if a dispatcher keeps thousands.
+    pub fn matching(&self) -> Vec<PathBuf> {
+        let extra = EXTRA.read().unwrap_or_else(|e| e.into_inner());
+        let patterns = extra.get(&self.name).map_or(&[][..], |e| &e.patterns[..]);
+        let mut out: Vec<PathBuf> = patterns
+            .iter()
+            .flat_map(|(dir, start)| {
+                std::fs::read_dir(dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(move |p| {
+                        p.is_dir()
+                            && p.file_name()
+                                .and_then(OsStr::to_str)
+                                .is_some_and(|n| n.starts_with(start.as_str()))
+                    })
+            })
+            .map(|named| self.resolve_with(&named, &named, Some(named.as_os_str())))
+            .collect();
+        out.sort();
+        out
     }
 
     /// The home a process runs against, read from its own environment as `ps` prints it:
