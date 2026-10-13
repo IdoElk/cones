@@ -241,6 +241,7 @@ pub fn sessions_from(ps: &str, codex: &Path) -> anyhow::Result<Vec<Session>> {
     let own = crate::fleet::own_home_processes(
         ps,
         crate::config::HarnessKind::Codex,
+        codex,
         &procs.iter().map(|p| p.pid).collect::<Vec<_>>(),
     );
     procs.retain(|p| own.contains(&p.pid));

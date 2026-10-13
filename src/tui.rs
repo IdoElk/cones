@@ -383,6 +383,7 @@ impl Data {
             }
         };
         let config_started = Instant::now();
+        crate::harness::spec::configure_homes(&config::homes(jobs_path));
         let jobs = match config::read_jobs(jobs_path) {
             Ok(jobs) => jobs,
             Err(error) => {

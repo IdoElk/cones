@@ -17,9 +17,24 @@ six more have [experimental terminal adapters](#additional-terminal-harnesses).
 | OpenCode | `$XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode` | Processes, owned-client reports and SQLite. |
 
 A missing home or disabled harness skips its reader. Process discovery matches executables,
-not names inside arguments. Native home overrides and `HOME` from the process environment
-exclude clients belonging to other homes; an environment hidden by macOS keeps a process out
-for its first ten seconds, then lists it. Kernel information supplies cwd/open files, with `lsof` fallback. An unreadable
+not names inside arguments.
+
+Each harness can have more homes than its own, and every one is read the same way: live
+sessions, state and reported columns, history, and the native join, message, stop and resume,
+which run against the home that recorded the session. A headless run, such as `claude -p` or
+`codex exec`, has no client to join and is read like any other external session.
+
+| Source | Homes |
+| --- | --- |
+| Configured | The directories [`homes`](jobs.md#homes) names for the harness. Needed for sessions that have finished, and for clients started under another `HOME`. |
+| Detected | The home a live client names in its environment, when that client runs under your own `HOME`. cones reads the home from then until it exits; nothing is written to configuration. |
+
+Detection is off for a harness whose home variable is set where cones runs, and for every
+harness while `CLAUDE_CONFIG_DIR` is set: an override pins what cones reads, and configured
+homes are still added. A client under another `HOME` whose home is not configured belongs to
+another fleet and is not listed. A client whose environment names no home is listed in the
+harness's own; an environment hidden by macOS keeps a process out for its first ten seconds,
+then lists it there. Reading another home starts nothing in it. Kernel information supplies cwd/open files, with `lsof` fallback. An unreadable
 process table fails the refresh rather than reporting that every session exited.
 
 ### Claude Code

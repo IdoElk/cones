@@ -403,6 +403,7 @@ fn execute(cli: Cli) -> Result<i32> {
     )?;
     let jobs_path = cones::expand_path(&cli.jobs, &cwd)?;
     let claude = cones::fleet::claude_dir()?;
+    cones::harness::spec::configure_homes(&config::homes(&jobs_path));
     // No subcommand is the dashboard: `cones` is the dashboard, and the rest is machinery.
     let Some(command) = cli.command else {
         // Now that a bare `cones` is the dashboard, a pipe or a cron line reaches it by accident.

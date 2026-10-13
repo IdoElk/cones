@@ -25,6 +25,7 @@ jobs:
 | `jobs` | Job list; `[]` is valid for a dashboard with no scheduled work. |
 | `columns`, `run_columns`, `job_columns`, `history_columns`, `whole_columns`, `highlight`, `worktrees`, `confirm_secs` | [List settings](#list-settings). |
 | `folders` | [Pinned folders](dashboard.md#add-a-folder). |
+| `homes` | [Extra native homes](#homes) to read, by harness. |
 | `pane` | [Viewer position and size](#pane). |
 | `start` | [Initial dashboard settings](#start). |
 | `activity` | [Activity chart settings](#activity). |
@@ -151,6 +152,22 @@ The agent `folder` column appears when grouped by state. Normal folder groups id
 Missing values show `-`. `cpu`, `memory` and `children` cover the agent's process tree, stopping at any other listed session below it. Summed resident memory counts pages the processes share once per process. A session with no process of its own shows `-`. A Codex thread runs inside the daemon that holds it, so its row reports that daemon's process tree and every thread of one daemon reports the same number; a thread the daemon has released shows `-`. History offers no live state, activity chart or process columns. Unknown column names are rejected; duplicate names are ignored. Older `last`, `dir`, `took` and `commands` names remain accepted as aliases for `last_reply`, `folder`, `duration` and `children`; saves write the explicit names.
 
 Claude run details come from saved output, falling back to an archived transcript. Context windows and live costs come from the saved status line when available. Current job settings do not supply historical model or context values. Ledger timestamps remain UTC; displayed times use the machine's local timezone, including daylight saving changes. [Harness reports](harness.md#reports) describe the native sources.
+
+## Homes
+
+```yaml
+homes:
+  claude: [/srv/agents/task-1/claude]
+  codex: [~/dispatch/codex-home]
+```
+
+`homes` maps a harness name to directories cones reads beside that harness's own home. Each
+is the directory the harness's home variable would name, such as `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME`, absolute or under `~`. Sessions there are listed, read and controlled like any
+other; a directory that does not exist yet is skipped until it does. The dashboard's config
+editor does not show this setting; `cones config set homes.codex '[~/dispatch/codex-home]'`
+writes it. cones already reads the home of a live client started under your own `HOME`, so
+the list is for [sessions detection cannot see](harness.md#discovery).
 
 ## Pane
 

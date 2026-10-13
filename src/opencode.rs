@@ -497,6 +497,7 @@ pub fn sessions(home: &Path) -> Result<Vec<Session>> {
     let own = fleet::own_home_processes(
         "/bin/ps",
         HarnessKind::Opencode,
+        home,
         &procs.iter().map(|p| p.pid).collect::<Vec<_>>(),
     );
     procs.retain(|p| own.contains(&p.pid));

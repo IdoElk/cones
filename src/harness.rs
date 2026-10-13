@@ -704,13 +704,10 @@ fn codex_client(
 /// The native home a row was discovered in. A Codex thread names its own through the rollout
 /// it writes, because a home pinned to another provider region keeps its own daemon.
 pub fn home_of(session: &crate::fleet::Session, claude: &Path) -> PathBuf {
-    if session.harness == HarnessKind::Codex.to_string()
-        && let Some(rollout) = &session.transcript_path
-        && let Some(home) = crate::codex::home_of(rollout)
-    {
-        return home.to_owned();
-    }
-    by_name(&session.harness).map_or_else(|| claude.to_owned(), |spec| spec.home.resolve(claude))
+    by_name(&session.harness).map_or_else(
+        || claude.to_owned(),
+        |spec| spec.session_home(claude, session),
+    )
 }
 
 /// One note to a live session, through the delivery its harness declares.
@@ -924,7 +921,12 @@ pub fn join(
     let spec = by_name(&session.harness).context("unknown session harness")?;
     let mut command = match spec.session(session.kind.as_deref()).join {
         spec::Join::Unavailable => bail!(own_terminal(&spec.name)),
-        spec::Join::Attach => Claude.attach(&session.session_id, &session.cwd),
+        spec::Join::Attach => Claude
+            .attach(&session.session_id, &session.cwd)
+            .map(|mut c| {
+                spec.home.set_command_home(&mut c, home);
+                c
+            }),
         spec::Join::CodexRemote => {
             check_operation(spec, &spec.operations.attach, "attach")?;
             codex_client(

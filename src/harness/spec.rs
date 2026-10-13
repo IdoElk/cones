@@ -202,6 +202,9 @@ pub struct Sessions {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Home {
+    /// The harness this home belongs to, which names its extra homes below.
+    #[serde(skip)]
+    pub name: String,
     pub env: String,
     pub default: HomeDefault,
     pub siblings: Option<Siblings>,
@@ -259,9 +262,15 @@ pub struct Daemon {
 impl Discovery {
     /// The OS parser is shared. Each definition supplies only its native process filter.
     pub fn processes<'a>(&self, ps: &'a str) -> Vec<crate::fleet::ProcessLine<'a>> {
-        let Some(program) = &self.process else {
-            return Vec::new();
-        };
+        match &self.process {
+            Some(program) => self.clients(program, ps),
+            None => Vec::new(),
+        }
+    }
+
+    /// The same filter for a harness whose sessions come from a registry: its clients still
+    /// say which home they run against, under the harness's own name.
+    pub fn clients<'a>(&self, program: &str, ps: &'a str) -> Vec<crate::fleet::ProcessLine<'a>> {
         crate::fleet::process_lines(ps)
             .into_iter()
             .filter(|line| {
@@ -280,7 +289,7 @@ impl Discovery {
                         .canonicalize()
                         .ok()
                         .and_then(|p| p.file_name().map(OsStr::to_owned))
-                        .is_some_and(|name| name == program.as_str());
+                        .is_some_and(|name| name == program);
                 // The `/usr/bin/python3` shim re-executes a framework build named `Python`.
                 let python = executable
                     .to_ascii_lowercase()
@@ -937,6 +946,7 @@ impl HarnessSpec {
             serde_yaml::from_str(yaml).context("reading harness definition")?;
         let (native, launch, resume) = handlers(definition.kind);
         definition.discovery.handler = native;
+        definition.home.name = definition.kind.to_string();
         definition.transcript.handler = native;
         definition.state.handler = if native == Native::Claude {
             StateHandler::ClaudeRegistry
@@ -1424,15 +1434,22 @@ impl HarnessSpec {
 
     /// Resolve a row's original home before falling back to the launch default.
     pub fn session_home(&self, claude: &Path, session: &Session) -> PathBuf {
+        let Some(transcript) = session.transcript_path.as_deref() else {
+            return self.home.resolve(claude);
+        };
         if self.discovery.handler == Native::Codex
-            && let Some(home) = session
-                .transcript_path
-                .as_deref()
-                .and_then(crate::codex::home_of)
+            && let Some(home) = crate::codex::home_of(transcript)
         {
             return home.to_owned();
         }
-        self.home.resolve(claude)
+        // Every harness keeps a conversation under the home that recorded it. The longest
+        // match wins, so a home nested in another is still its own.
+        self.home
+            .all(claude)
+            .into_iter()
+            .filter(|home| transcript.starts_with(home))
+            .max_by_key(|home| home.components().count())
+            .unwrap_or_else(|| self.home.resolve(claude))
     }
 }
 
@@ -1444,7 +1461,54 @@ fn env_value<'a>(env: &'a str, name: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+/// Homes read beside each harness's own, by harness name: the ones `homes` in jobs.yaml
+/// names, and the ones live clients were seen running against. Both are ambient the way the
+/// home variables are, so every reader of `Home::all` agrees on the set without carrying it.
+#[derive(Default)]
+struct Extra {
+    configured: Vec<PathBuf>,
+    detected: Vec<PathBuf>,
+}
+
+static EXTRA: std::sync::RwLock<BTreeMap<String, Extra>> = std::sync::RwLock::new(BTreeMap::new());
+
+/// Replace the configured homes of every harness with what jobs.yaml states now.
+pub fn configure_homes(homes: &BTreeMap<HarnessKind, Vec<PathBuf>>) {
+    let mut extra = EXTRA.write().unwrap_or_else(|e| e.into_inner());
+    for entry in extra.values_mut() {
+        entry.configured.clear();
+    }
+    for (kind, paths) in homes {
+        extra.entry(kind.to_string()).or_default().configured = paths.clone();
+    }
+}
+
 impl Home {
+    /// Whether nothing pins this harness to one home, so the clients of this user that run
+    /// against another are this fleet's too. An override pins it, and so does a Claude root
+    /// that is not the user's own, which is how a fixture or a second fleet reads its own.
+    pub fn detects(&self) -> bool {
+        let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+        !set(&spec(HarnessKind::Claude).home.env) && (self.env.is_empty() || !set(&self.env))
+    }
+
+    /// Read `home` from now on, because a live client of this user runs against it.
+    pub fn detected(&self, home: PathBuf) {
+        let mut extra = EXTRA.write().unwrap_or_else(|e| e.into_inner());
+        let seen = &mut extra.entry(self.name.clone()).or_default().detected;
+        if !seen.contains(&home) {
+            seen.push(home);
+        }
+    }
+
+    /// `of_process` for a client under `user`'s own home directory. A client with another
+    /// `HOME` is another fleet's: a capture fixture's, or a test's.
+    pub fn of_peer(&self, env: &str, user: &Path) -> Option<PathBuf> {
+        (Path::new(env_value(env, "HOME")?) == user)
+            .then(|| self.of_process(env))
+            .flatten()
+    }
+
     /// The home a process runs against, read from its own environment as `ps` prints it:
     /// space-separated `NAME=value` pairs after the command line. `None` when that environment
     /// names no user home, which is how an unreadable environment arrives.
@@ -1515,7 +1579,31 @@ impl Home {
         command.env(&self.env, value);
     }
 
+    /// Every home to read: the harness's own, the siblings it keeps beside it, the ones
+    /// jobs.yaml names and the ones live clients were seen running against. The first is the
+    /// one a launch uses.
     pub fn all(&self, claude: &Path) -> Vec<PathBuf> {
+        let mut out = self.own(claude);
+        let extra = EXTRA.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(extra) = extra.get(&self.name) {
+            // What live clients named belongs to the machine's own fleet, not to a caller
+            // reading a root of its own.
+            let own = self.detects() && crate::fleet::claude_dir().is_ok_and(|own| own == claude);
+            let detected = own.then_some(&extra.detected);
+            for home in extra
+                .configured
+                .iter()
+                .chain(detected.into_iter().flatten())
+            {
+                if !out.contains(home) {
+                    out.push(home.clone());
+                }
+            }
+        }
+        out
+    }
+
+    fn own(&self, claude: &Path) -> Vec<PathBuf> {
         let base = self.resolve(claude);
         let Some(siblings) = &self.siblings else {
             return vec![base];

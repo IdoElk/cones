@@ -299,11 +299,11 @@ fn a_scheduled_job_is_created_edited_and_deleted_leaving_the_rest_of_the_file_as
     d.capture("edit-settings");
     d.press("enter", ENTER);
     d.wait_file("jobs.yaml", |t| t.contains("for v2"));
-    let screen = d.wait_text("job release-notes saved · install failed");
-    assert!(
-        screen.contains("release-notes  15 18 * * 1-5  -"),
-        "{screen}"
-    );
+    // The first save's notice is still on screen, so wait for the row the edit reloads.
+    d.wait_for("the edited job's row", |s| {
+        s.contains("job release-notes saved · install failed")
+            && s.contains("release-notes  15 18 * * 1-5  -")
+    });
     // The block is replaced in place; the timeout is written as the float the field holds.
     let edited_block = format!(
         "  - name: release-notes\n    schedule: 15 18 * * 1-5\n    cwd: {}\n    prompt: write release notes for v2\n    timeout_min: 35.0\n    overlap: allow\n",

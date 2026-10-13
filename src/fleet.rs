@@ -421,10 +421,11 @@ fn pass_argv(ps: &str) -> HashMap<u32, (String, DateTime<Utc>)> {
 // ponytail: fixed bound; a real client on a platform binary shows this late, none is known.
 const HIDDEN_ENVIRONMENT_WAIT: chrono::TimeDelta = chrono::TimeDelta::seconds(10);
 
-/// The pids among `pids` running against a home this fleet reads. Process discovery names a
-/// harness by its program alone, so a client started against another home, such as a capture
-/// fixture's, otherwise arrives as a row with a command line and nothing else: its state, model
-/// and activity live in records under a home cones never opens.
+/// The pids among `pids` running against `home`. Process discovery names a harness by its
+/// program alone, so each client is listed in the pass over the home it runs against, where
+/// its state, model and activity are recorded. A client of a home this fleet does not read,
+/// such as a capture fixture's, is in no pass: it would arrive as a row with a command line
+/// and nothing else. A client whose environment names no home is the first home's.
 ///
 /// Two `ps` reads cover the listed pids alone, because the whole table with environments is
 /// several times larger and every refresh would read it. macOS prints no environment for a
@@ -441,12 +442,16 @@ const HIDDEN_ENVIRONMENT_WAIT: chrono::TimeDelta = chrono::TimeDelta::seconds(10
 pub fn own_home_processes(
     ps: &str,
     kind: crate::config::HarnessKind,
+    of: &Path,
     pids: &[u32],
 ) -> HashSet<u32> {
     let home = &crate::harness::spec(kind).home;
     let Ok(read) = claude_dir().map(|dir| home.all(&dir)) else {
         return pids.iter().copied().collect();
     };
+    // A home outside the set, which only a caller naming its own root passes, is read alone.
+    let alone = !read.contains(&of.to_owned());
+    let first = alone || read.first().is_some_and(|h| h == of);
     let list = pids
         .iter()
         .map(u32::to_string)
@@ -462,15 +467,79 @@ pub fn own_home_processes(
                 return true;
             };
             match with_environment.get(pid) {
-                None => with_environment.is_empty(),
+                None => with_environment.is_empty() && first,
                 Some(full) if !full.starts_with(argv.as_str()) => false,
                 Some(full) => match environment(full, argv) {
-                    None => Utc::now() - *started >= HIDDEN_ENVIRONMENT_WAIT,
-                    Some(env) => home.of_process(env).is_none_or(|used| read.contains(&used)),
+                    None => first && Utc::now() - *started >= HIDDEN_ENVIRONMENT_WAIT,
+                    Some(env) => match home.of_process(env) {
+                        None => first,
+                        Some(used) => read.contains(&used) && (alone || used == of),
+                    },
                 },
             }
         })
         .collect()
+}
+
+/// Note the homes live clients of `kinds` run against, so `Home::all` reads them from now on.
+/// Only a client under this user's own `HOME` counts, and only while nothing pins the harness
+/// to one home; see `Home::detects`. A process keeps the environment it started with, so each
+/// is read once, in one `ps` for every harness: a refresh with no new client spawns nothing.
+pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
+    type Seen = HashSet<(crate::config::HarnessKind, u32, DateTime<Utc>)>;
+    static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
+    let kinds: Vec<_> = kinds
+        .iter()
+        .map(|&kind| crate::harness::spec(kind))
+        .filter(|spec| spec.home.detects())
+        .collect();
+    let (Some(user), false, Ok(table)) = (dirs::home_dir(), kinds.is_empty(), pass_table(ps))
+    else {
+        return;
+    };
+    let live: Vec<_> = kinds
+        .iter()
+        .flat_map(|spec| {
+            let program = spec.discovery.process.as_deref().unwrap_or(&spec.name);
+            let clients = spec.discovery.clients(program, &table);
+            clients.into_iter().map(|p| (spec.kind, p.pid, p.started))
+        })
+        .collect();
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = seen.get_or_insert_with(HashSet::new);
+    seen.retain(|key| !kinds.iter().any(|spec| spec.kind == key.0) || live.contains(key));
+    let new: Vec<_> = live.iter().filter(|key| !seen.contains(key)).collect();
+    let list = new
+        .iter()
+        .map(|key| key.1.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let argv = pass_argv(ps);
+    let with_environment = process_column(ps, &list, "-wwEp");
+    for key in new {
+        let env = argv.get(&key.1).and_then(|(argv, _)| {
+            let full = with_environment.get(&key.1)?;
+            environment(full, argv)
+        });
+        // A young process may still be the shim that hides its environment, and a pid that
+        // changed between the reads says nothing: both are asked again. One hidden for good
+        // names no home.
+        if env.is_none() && Utc::now() - key.2 < HIDDEN_ENVIRONMENT_WAIT {
+            continue;
+        }
+        seen.insert(*key);
+        let home = &crate::harness::spec(key.0).home;
+        if let Some(found) = env.and_then(|env| home.of_peer(env, &user)) {
+            home.detected(found);
+        }
+    }
+}
+
+/// `detect_homes` for every harness, for a command that names one session without listing all.
+pub fn detect_all_homes(claude: &Path) {
+    if claude_dir().is_ok_and(|own| own == claude) {
+        detect_homes("/bin/ps", crate::harness::known());
+    }
 }
 
 /// `ps` prints the environment after the command line with no separator of its own, so the
@@ -1542,22 +1611,41 @@ pub(crate) fn all_observed(
     crate::observe::reset();
     let mut out = Vec::new();
     let mut argv = None;
+    // Only the machine's own fleet looks for clients of other homes: a caller naming its own
+    // root reads that root.
+    if claude_dir().is_ok_and(|own| own == claude) {
+        let offered: Vec<_> = crate::harness::known()
+            .iter()
+            .copied()
+            .filter(|&kind| offered.enabled_for(kind))
+            .collect();
+        detect_homes("/bin/ps", &offered);
+    }
     for &kind in crate::harness::known() {
         if !offered.enabled_for(kind) {
             continue;
         }
         let spec = crate::harness::spec(kind);
-        // Live process discovery keeps its existing default-home scope. Saved daemon threads
-        // from additional homes are supplied separately by the dashboard.
-        let home = spec.home.resolve(claude);
-        let started = std::time::Instant::now();
-        let result = spec.discovery.handler.sessions(&home);
-        observe(&spec.name, &home, started.elapsed(), &result);
+        // Each home is its own pass over the harness. Saved daemon threads are supplied
+        // separately by the dashboard.
+        let mut found = Vec::new();
+        for (i, home) in spec.home.all(claude).into_iter().enumerate() {
+            let started = std::time::Instant::now();
+            let result = spec.discovery.handler.sessions(&home);
+            observe(&spec.name, &home, started.elapsed(), &result);
+            match result {
+                Ok(rows) => found.extend(rows),
+                // The harness's own home failing is the refresh failing. Another home, which
+                // a task may have removed since, costs its own rows only.
+                Err(e) if i == 0 => return Err(e),
+                Err(_) => {}
+            }
+        }
         let skip = spec
             .launch
             .as_ref()
             .map_or(&[][..], |l| &l.skip_permissions[..]);
-        for mut s in result? {
+        for mut s in found {
             identify(&mut s);
             // A harness that reports no mode still shows the skip flag it was launched with.
             // Without the flag the mode is unknown, not prompting: its own config may skip them.
@@ -1611,6 +1699,39 @@ pub(crate) fn control_session(claude: &Path, session_id: &str) -> Result<Option<
     // Control is not observation: begin a pass so no adapter answers from a table read for an
     // earlier one. A pid that has been reused since must not be signalled on an old reading.
     crate::observe::reset();
+    detect_all_homes(claude);
+    let registry = crate::harness::spec(crate::config::HarnessKind::Claude);
+    for home in registry.home.all(claude) {
+        if let Some(s) = control_claude(&home, session_id)? {
+            return Ok(Some(s));
+        }
+    }
+    for &kind in crate::harness::known() {
+        let spec = crate::harness::spec(kind);
+        if spec.discovery.registry.is_some() {
+            continue;
+        }
+        for home in spec.home.all(claude) {
+            if let Some(session) = spec
+                .discovery
+                .handler
+                .sessions(&home)?
+                .into_iter()
+                .map(|mut s| {
+                    identify(&mut s);
+                    s
+                })
+                .find(|s| s.session_id == session_id || s.native() == session_id)
+            {
+                return Ok(Some(session));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `control_session` in one Claude home: its registry, then its settled job records.
+fn control_claude(claude: &Path, session_id: &str) -> Result<Option<Session>> {
     match fs::read_dir(
         claude.join(
             crate::harness::spec(crate::config::HarnessKind::Claude)
@@ -1652,25 +1773,6 @@ pub(crate) fn control_session(claude: &Path, session_id: &str) -> Result<Option<
     {
         return Ok(Some(s));
     }
-    for &kind in crate::harness::known() {
-        let spec = crate::harness::spec(kind);
-        if spec.discovery.registry.is_some() {
-            continue;
-        }
-        if let Some(session) = spec
-            .discovery
-            .handler
-            .sessions(&spec.home.resolve(claude))?
-            .into_iter()
-            .map(|mut s| {
-                identify(&mut s);
-                s
-            })
-            .find(|s| s.session_id == session_id || s.native() == session_id)
-        {
-            return Ok(Some(session));
-        }
-    }
     Ok(None)
 }
 
@@ -1682,6 +1784,7 @@ pub fn stop(claude: &Path, session_id: &str) -> Result<bool> {
     let spec = crate::harness::by_name(&session.harness).context("unknown session harness")?;
     if spec.session(session.kind.as_deref()).stop == crate::harness::spec::Stop::Remove {
         crate::harness::check_operation(spec, &spec.operations.remove, "remove")?;
+        let home = spec.session_home(claude, &session);
         let claude = crate::harness::executable(&spec.name, &crate::harness::launch_path())
             .with_context(|| format!("{} not found", spec.name))?;
         let short = session_id.get(..8).context("invalid session id")?;
@@ -1690,7 +1793,9 @@ pub fn stop(claude: &Path, session_id: &str) -> Result<bool> {
             &[("id", session_id.as_ref()), ("short_id", short.as_ref())],
         )?;
         let rm = |extra: &[&str]| {
-            Command::new(&claude)
+            let mut command = Command::new(&claude);
+            spec.home.set_command_home(&mut command, &home);
+            command
                 .args(&args)
                 .args(extra)
                 .stdin(Stdio::null())
@@ -2672,8 +2777,9 @@ mod tests {
         // launchd is a platform binary whose environment macOS hides. A hidden environment
         // keeps the process, because it must never empty the fleet.
         let me = std::process::id();
-        assert!(own_home_processes("/bin/ps", kind, &[me]).contains(&me));
-        assert!(own_home_processes("/bin/ps", kind, &[1]).contains(&1));
+        let first = home.resolve(&claude_dir().unwrap());
+        assert!(own_home_processes("/bin/ps", kind, &first, &[me]).contains(&me));
+        assert!(own_home_processes("/bin/ps", kind, &first, &[1]).contains(&1));
     }
 
     // A test fixture started through the `/usr/bin/python3` shim is a platform binary until it
@@ -2704,6 +2810,7 @@ mod tests {
         let own = own_home_processes(
             ps.to_str().unwrap(),
             crate::config::HarnessKind::Pi,
+            &crate::pi::home(&claude_dir().unwrap()),
             &[4201, 4202, 4203, 4204],
         );
         assert_eq!(

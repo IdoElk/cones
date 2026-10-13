@@ -19,6 +19,7 @@ mod dashboard_terminal;
 mod dashboard_update;
 mod history;
 mod history_api;
+mod homes;
 mod launch;
 mod notes;
 mod opencode;

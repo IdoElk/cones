@@ -67,6 +67,8 @@ and the full reference. Read it first whenever the owner wants to change:
 - what new sessions start with: which harnesses are offered, model, effort, permission prompts,
   Bedrock;
 - the folders pinned in the session list;
+- which native homes are read: `homes` adds directories for agents run with their own
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or the like, when `cones ls` does not already show them;
 - scheduled work: adding, changing or removing a job, its schedule, timeout or notifications.
 
 Its rules cover setting one value, editing the file by hand and validating it, and when a

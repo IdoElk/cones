@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum HarnessKind {
     Claude,
@@ -364,6 +364,9 @@ pub struct JobsFile {
     /// Pinned folders, offered under `+ add folder` while they are not open.
     #[serde(default)]
     pub folders: Option<Vec<String>>,
+    /// Native homes read beside each harness's own, by harness name.
+    #[serde(default)]
+    pub homes: Option<std::collections::BTreeMap<HarnessKind, Vec<String>>>,
     /// Colour of a session row marked in the dashboard with ctrl+p.
     #[serde(default)]
     pub highlight: Option<String>,
@@ -848,6 +851,11 @@ fn parse(path: &Path) -> Result<JobsFile> {
     if let Some(secs) = doc.confirm_secs {
         check_confirm_secs(secs)?;
     }
+    for (kind, homes) in doc.homes.iter().flatten() {
+        for home in homes {
+            home_path(*kind, home)?;
+        }
+    }
     Ok(doc)
 }
 
@@ -950,6 +958,31 @@ pub fn folder_path(folder: &str) -> Result<PathBuf> {
         "folders: {folder}: an absolute path, or one under ~"
     );
     expand_path(Path::new(folder), Path::new("/")).map_err(|e| e.context("folders"))
+}
+
+/// The homes jobs.yaml adds to each harness's own, `~` expanded; a missing or invalid file
+/// adds none. cones reads these and starts nothing in them.
+pub fn homes(path: &Path) -> std::collections::BTreeMap<HarnessKind, Vec<PathBuf>> {
+    parse(path)
+        .ok()
+        .and_then(|d| d.homes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(kind, homes)| {
+            let homes = homes.iter().filter_map(|h| home_path(kind, h).ok());
+            (kind, homes.collect())
+        })
+        .collect()
+}
+
+/// One added home: the directory the harness's own home variable would name.
+fn home_path(kind: HarnessKind, home: &str) -> Result<PathBuf> {
+    let home = home.trim();
+    ensure!(
+        home.starts_with('/') || home.starts_with('~'),
+        "homes.{kind}: {home}: an absolute path, or one under ~"
+    );
+    expand_path(Path::new(home), Path::new("/")).with_context(|| format!("homes.{kind}"))
 }
 
 /// Read columns, falling back to built-ins if missing or invalid.

@@ -96,6 +96,7 @@ fn a_launch_names_a_home_only_when_it_differs_from_the_one_the_harness_would_pic
             .map(|(_, value)| value.unwrap().to_owned())
     };
     let native = Home {
+        name: String::new(),
         env: "CONES_TEST_NATIVE_HOME".into(),
         default: HomeDefault::User {
             path: ".native".into(),
@@ -108,6 +109,7 @@ fn a_launch_names_a_home_only_when_it_differs_from_the_one_the_harness_would_pic
         Some(OsString::from("/isolated/.native"))
     );
     let xdg = Home {
+        name: String::new(),
         env: "CONES_TEST_XDG_HOME".into(),
         default: HomeDefault::XdgData {
             path: "native".into(),

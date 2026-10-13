@@ -145,6 +145,7 @@ pub fn sessions(kind: HarnessKind, home: &Path) -> Result<Vec<Session>> {
     let own = crate::fleet::own_home_processes(
         "/bin/ps",
         kind,
+        home,
         &processes.iter().map(|p| p.pid).collect::<Vec<_>>(),
     );
     Ok(processes

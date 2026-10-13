@@ -41,6 +41,9 @@ pub fn locate_scoped(
     harness: Option<&str>,
     home: Option<&Path>,
 ) -> Result<Located> {
+    // A live client names the home it runs against; nothing else has looked for one yet.
+    crate::observe::reset();
+    crate::fleet::detect_all_homes(claude);
     locate_entries(&history::all(&history::sources(claude))?, id, harness, home)
 }
 
