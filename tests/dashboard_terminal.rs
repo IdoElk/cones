@@ -336,7 +336,13 @@ fn a_second_terminal_opens_beside_the_first_and_ctrl_x_twice_stops_only_one() {
     d.press("ctrl+z", CTRL_Z);
     wait_list(&d);
     d.press("ctrl+x on a Hebrew layout", CTRL_X_HEBREW);
-    d.wait_text("ctrl+ס: shortcuts need an English keyboard layout");
+    let screen = d.wait_text("⚠ ctrl+ס: shortcuts need an English keyboard layout");
+    assert!(
+        screen
+            .lines()
+            .any(|l| l.starts_with(" ⚠ ctrl+ס") && l.contains('─')),
+        "the layout warning sits on the composer rule: {screen}"
+    );
     d.capture("hebrew-layout-warning");
     d.press("ctrl+x", CTRL_X);
     d.press("ctrl+x", CTRL_X);

@@ -17342,8 +17342,9 @@ pub fn run(
                             && let KeyCode::Char(c) = k.code
                             && !c.is_ascii()
                         {
-                            app.status =
-                                format!("ctrl+{c}: shortcuts need an English keyboard layout");
+                            app.status = warning(format_args!(
+                                "ctrl+{c}: shortcuts need an English keyboard layout"
+                            ));
                         }
                     }
                     Event::Paste(text) => app.paste(&text),
