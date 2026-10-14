@@ -7,7 +7,9 @@
 //! shell or a text selection; dragging moves the divider, the list redraws to its new width
 //! and the shell's pty is resized to the pane's; a drag past the edge stops at 30 percent
 //! for the list; each release saves the share as `pane.ratio` in jobs.yaml, and a restarted
-//! dashboard draws the divider where the last drag left it. No harness or model is started.
+//! dashboard draws the divider where the last drag left it. A wheel report split across two
+//! reads, its Esc alone and then its text, never reaches the shell, while a typed Esc still
+//! does. No harness or model is started.
 use crate::dashboard::*;
 use std::fs;
 
@@ -139,5 +141,30 @@ fn dragging_the_divider_resizes_list_and_pane_and_persists() {
     });
     d.capture("restarted");
     assert!(screen.contains("zsh"), "the hosted shell's row:\n{screen}");
+    d.quit();
+}
+
+#[test]
+fn a_split_wheel_report_never_reaches_the_pane() {
+    let mut d = Dashboard::new("pane-split-wheel-report", &[]);
+    fs::write(d.home().join(".zshrc"), format!("PROMPT='{PROMPT} '\n")).unwrap();
+    d.start();
+    d.press("enter", ENTER);
+    d.wait_for("a shell in the pane", |s| s.contains(PROMPT));
+    d.typed("cat -v > split.txt\r");
+    // The Esc read alone, as crossterm reports a lone byte, and the rest a moment later.
+    d.burst("wheel report, Esc", b"\x1b");
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    d.press("wheel report, text", b"[<65;80;5M");
+    // A typed Esc waits out the window and still reaches the shell.
+    d.press("esc", b"\x1b");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    d.typed("ok\r");
+    d.press("ctrl+d", b"\x04");
+    let out = d.wait_file("project/split.txt", |s| s.ends_with('\n'));
+    d.keep("project/split.txt");
+    assert_eq!(out, "^[ok\n");
+    d.press("ctrl+z", CTRL_Z);
+    d.wait_for("the list", |s| s.contains("tab pane"));
     d.quit();
 }

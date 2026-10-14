@@ -303,6 +303,14 @@ impl Dashboard {
         std::thread::sleep(Duration::from_millis(60));
     }
 
+    /// Send raw bytes with no pause after, so the next write can land within one read window.
+    pub fn burst(&mut self, label: &str, bytes: &[u8]) {
+        let _ = writeln!(self.keys, "{label}");
+        let master = self.master.as_mut().expect("dashboard started");
+        master.write_all(bytes).unwrap();
+        master.flush().unwrap();
+    }
+
     pub fn typed(&mut self, text: &str) {
         let _ = writeln!(self.keys, "type {text:?}");
         for c in text.chars() {

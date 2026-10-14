@@ -54,6 +54,64 @@ use std::{
 static SHELL_TTY: OnceLock<Option<libc::termios>> = OnceLock::new();
 
 /// Restore the shell's line discipline and disable reporting modes that would leak input to it.
+fn is_bare_esc(e: &Event) -> bool {
+    matches!(e, Event::Key(k) if k.code == KeyCode::Esc && k.modifiers.is_empty() && k.kind == KeyEventKind::Press)
+}
+
+/// A wheel report split across two reads reaches crossterm as a bare Esc and then its text,
+/// `[<65;127;56M`. Forwarded to a pane, the Esc interrupts the client and the text lands in
+/// its prompt. After a bare Esc, read on for a moment: `None` when the events complete a
+/// report, which is dropped with the Esc, otherwise the events read, to be handled in order.
+fn split_mouse_report() -> Result<Option<Vec<Event>>> {
+    // ponytail: fixed 50ms hold on Esc, only while a pane has focus; the two reads of one
+    // report land microseconds apart, and a typed Esc waits no longer than a frame or three.
+    let deadline = Instant::now() + Duration::from_millis(50);
+    let mut read = Vec::new();
+    let mut text = String::new();
+    while event::poll(deadline.saturating_duration_since(Instant::now()))? {
+        let e = event::read()?;
+        let c = match &e {
+            Event::Key(k) if (k.modifiers - KeyModifiers::SHIFT).is_empty() => match k.code {
+                KeyCode::Char(c) => Some((c, k.kind == KeyEventKind::Press)),
+                _ => None,
+            },
+            _ => None,
+        };
+        read.push(e);
+        match c {
+            // A kitty-protocol release of a character already counted.
+            Some((_, false)) => continue,
+            Some((c, true)) => text.push(c),
+            None => break,
+        }
+        match mouse_report(&text) {
+            Some(true) => return Ok(None),
+            Some(false) => {}
+            None => break,
+        }
+    }
+    Ok(Some(read))
+}
+
+/// Whether `text` is an SGR mouse report's tail after its Esc, `[<b;x;y` and `M` or `m`:
+/// `Some(true)` complete, `Some(false)` a prefix of one, `None` neither.
+fn mouse_report(text: &str) -> Option<bool> {
+    let (mut fields, mut digits) = (0, 0);
+    for (i, c) in text.chars().enumerate() {
+        match (i, c) {
+            (0, '[') | (1, '<') => {}
+            (0 | 1, _) => return None,
+            (_, '0'..='9') => digits += 1,
+            (_, ';') if digits > 0 && fields < 2 => (fields, digits) = (fields + 1, 0),
+            (_, 'M' | 'm') if digits > 0 && fields == 2 && i == text.len() - 1 => {
+                return Some(true);
+            }
+            _ => return None,
+        }
+    }
+    Some(false)
+}
+
 fn hand_back_tty() {
     if let Some(Some(t)) = SHELL_TTY.get() {
         unsafe {
@@ -17261,6 +17319,8 @@ pub fn run(
         let mut drawn_tick = usize::MAX;
         let mut drawn_refresh = app.refreshed;
         let mut redraw = true;
+        // Events read past a bare Esc that turned out not to start a mouse report.
+        let mut replay = std::collections::VecDeque::new();
         loop {
             // A closed terminal or a `kill` leaves through the same teardown as `q`, so the shell
             // gets its line discipline back and the viewers are reaped rather than hung up on.
@@ -17346,9 +17406,21 @@ pub fn run(
             }
             // Poll between animation frames for responsive input and reloads without idle repaints.
             let wait = Duration::from_millis(if app.focus.is_some() { 8 } else { 25 });
-            if event::poll(wait)? {
-                let mut e = event::read()?;
+            if !replay.is_empty() || event::poll(wait)? {
+                let mut e = match replay.pop_front() {
+                    Some(e) => e,
+                    None => event::read()?,
+                };
                 redraw = true;
+                if replay.is_empty() && app.focus.is_some() && is_bare_esc(&e) {
+                    match split_mouse_report()? {
+                        Some(after) => replay.extend(after),
+                        None => {
+                            app.event("debug", "input.split_mouse_report", || json!({}));
+                            continue;
+                        }
+                    }
+                }
                 // Terminal.app sends shift+enter as a bare return whatever a program asks for.
                 // Claude Code reads whether Shift is held there, and so does the dashboard.
                 if let Event::Key(k) = &mut e
