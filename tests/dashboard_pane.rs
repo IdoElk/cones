@@ -152,9 +152,10 @@ fn a_split_wheel_report_never_reaches_the_pane() {
     d.press("enter", ENTER);
     d.wait_for("a shell in the pane", |s| s.contains(PROMPT));
     d.typed("cat -v > split.txt\r");
-    // The Esc read alone, as crossterm reports a lone byte, and the rest a moment later.
+    // The Esc read alone, as crossterm reports a lone byte, and the rest a moment later. The
+    // gap stays well inside the 50ms window even when a loaded runner oversleeps.
     d.burst("wheel report, Esc", b"\x1b");
-    std::thread::sleep(std::time::Duration::from_millis(15));
+    std::thread::sleep(std::time::Duration::from_millis(2));
     d.press("wheel report, text", b"[<65;80;5M");
     // A typed Esc waits out the window and still reaches the shell.
     d.press("esc", b"\x1b");
@@ -164,6 +165,10 @@ fn a_split_wheel_report_never_reaches_the_pane() {
     let out = d.wait_file("project/split.txt", |s| s.ends_with('\n'));
     d.keep("project/split.txt");
     assert_eq!(out, "^[ok\n");
+    // The report reached the dashboard split, not as one mouse event.
+    d.wait_file("state/tui-debug.log", |s| {
+        s.contains("input.split_mouse_report")
+    });
     d.press("ctrl+z", CTRL_Z);
     d.wait_for("the list", |s| s.contains("tab pane"));
     d.quit();
