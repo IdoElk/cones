@@ -236,6 +236,38 @@ fn background_stop_names_the_session_home_keeps_the_conversation_and_signals_not
     assert_eq!(f.calls().lines().count(), 2, "{}", f.calls());
 }
 
+/// A prefix two sessions share names neither: the stop lists both and reaches no harness.
+#[test]
+fn a_prefix_two_sessions_share_stops_neither() {
+    let f = Fixture::new();
+    let (one, two) = (
+        "abcdef12-1111-4111-8111-111111111111",
+        "abcdef12-2222-4222-8222-222222222222",
+    );
+    let (idle_one, idle_two) = (Idle::new(), Idle::new());
+    f.live(one, "bg", idle_one.0.id());
+    f.live(two, "bg", idle_two.0.id());
+
+    let out = f.stop("abcdef12");
+    assert_eq!(out.status.code(), Some(1));
+    let failure = text(&out.stderr);
+    assert!(
+        failure.contains(&format!("abcdef12 matches 2 sessions: {one}, {two}")),
+        "{failure}"
+    );
+    assert_eq!(f.calls(), "", "an ambiguous prefix must reach no harness");
+
+    // A longer prefix that tells them apart stops only its own session.
+    let out = f.stop("abcdef12-2");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains(two), "{}", text(&out.stdout));
+    assert_eq!(
+        f.calls().trim(),
+        format!("stop abcdef12 {}", f.home().display())
+    );
+    assert!(idle_one.alive() && idle_two.alive());
+}
+
 /// A native refusal is the answer, not a cones-side interpretation of it: the message and the
 /// exact command are reported and the exit is a failure.
 #[test]
@@ -534,7 +566,9 @@ fn a_codex_thread_with_no_client_has_its_turn_interrupted_and_its_terminals_clos
     let rollout = codex_thread(&f, id);
     let calls = codex_daemon(&f, &[id]);
 
-    let out = f.stop(id);
+    // A thread with no client is a row only through its daemon, so the prefix `cones ls` users
+    // copy must resolve against those rows too.
+    let out = f.stop(&id[..8]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let message = text(&out.stdout);
     assert!(
