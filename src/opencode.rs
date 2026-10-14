@@ -255,6 +255,7 @@ impl Adapter for CostAdapter {
                         .ok_or("invalid_usage")?,
                     cache_read: n("/cache/read")?,
                     cache_write: n("/cache/write")?,
+                    cache_write_1h: 0,
                 })
             })(),
             gap: None,

@@ -230,12 +230,14 @@ statusLine cost, because those catalogs key prices by model ids the transcript d
 cones does not infer a provider from settings or model names. Codex prices requests at their own
 model/input size, counts cumulative updates once and includes reasoning in output. OpenCode
 adds its separately stored reasoning to output and requires all five native counters for
-fallback pricing. Reported nonstandard Codex service tiers and long-retention Claude/pi cache
-writes remain unpriced unless native dollar amounts exist.
+fallback pricing. Hour-long cache writes, which Claude and pi report for Anthropic replies,
+are priced at twice the model's input rate, Anthropic's published multiplier, because the
+catalog has no rate for them. Reported nonstandard Codex service tiers remain unpriced unless
+native dollar amounts exist.
 
 The models.dev catalog uses exact provider/model keys and USD-per-million-token rates, applying
 context tiers to whole requests. All-zero rates are unpriced. Estimates do not reconcile
-subscriptions, discounts, cache retention or invoice history. The dashboard refreshes prices
+subscriptions, discounts or invoice history. The dashboard refreshes prices
 after 24 hours, retries failures after an hour and rejects snapshots older than seven days.
 Validated snapshots replace `STATE_DIR/prices.json` atomically and invalidate accounting caches.
 Rendering never downloads; internal listings only use existing cache data.

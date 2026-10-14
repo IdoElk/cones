@@ -256,10 +256,6 @@ impl Adapter for CostAdapter {
                 .iter()
                 .all(|k| usage[k].as_u64() == Some(0)),
             usage: (|| {
-                // The shared catalog has no separate long-retention cache-write rate.
-                if usage["cacheWrite1h"].as_u64().is_some_and(|n| n > 0) {
-                    return Err("unsupported_cache_retention");
-                }
                 Ok(crate::cost::Usage {
                     provider: message["provider"]
                         .as_str()
@@ -271,6 +267,8 @@ impl Adapter for CostAdapter {
                     output: usage["output"].as_u64().ok_or("missing_counters")?,
                     cache_read: usage["cacheRead"].as_u64().ok_or("missing_counters")?,
                     cache_write: usage["cacheWrite"].as_u64().ok_or("missing_counters")?,
+                    // A subset of cacheWrite, reported only for Anthropic replies.
+                    cache_write_1h: usage["cacheWrite1h"].as_u64().unwrap_or(0),
                 })
             })(),
             gap: None,

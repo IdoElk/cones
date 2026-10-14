@@ -1345,12 +1345,6 @@ impl Adapter for CostAdapter {
                 if !matches!(usage["service_tier"].as_str(), None | Some("standard")) {
                     return Err("unsupported_service_tier");
                 }
-                if usage["cache_creation"]["ephemeral_1h_input_tokens"]
-                    .as_u64()
-                    .is_some_and(|n| n > 0)
-                {
-                    return Err("unsupported_cache_retention");
-                }
                 Ok(crate::cost::Usage {
                     provider,
                     model,
@@ -1362,6 +1356,10 @@ impl Adapter for CostAdapter {
                     cache_write: usage["cache_creation_input_tokens"]
                         .as_u64()
                         .ok_or("missing_counters")?,
+                    // Claude Code writes its cache for an hour; older replies have no split.
+                    cache_write_1h: usage["cache_creation"]["ephemeral_1h_input_tokens"]
+                        .as_u64()
+                        .unwrap_or(0),
                 })
             })(),
             gap: None,

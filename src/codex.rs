@@ -237,6 +237,7 @@ impl Adapter for CostAdapter {
                         .ok_or("invalid_usage")?,
                     cache_read: last.cached,
                     cache_write: last.written,
+                    cache_write_1h: 0,
                     // Reasoning is already included in output_tokens.
                     output: last.output,
                 })

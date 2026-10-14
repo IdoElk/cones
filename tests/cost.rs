@@ -415,5 +415,21 @@ fn every_registered_harness_inherits_fallback_precedence_coverage_and_cache_refr
             cost::init(&missing, false);
             assert_cost(&fixture, &mut reader, false, Some(0.2), Partial);
         }
+        // Anthropic reports the hour-long part of a cache write, charged at twice the input
+        // rate: 10 short writes at 3 and 20 hour-long ones at 4 per million.
+        let split = match kind {
+            HarnessKind::Claude => (
+                r#""cache_creation_input_tokens":30"#,
+                r#""cache_creation_input_tokens":30,"cache_creation":{"ephemeral_1h_input_tokens":20,"ephemeral_5m_input_tokens":10}"#,
+            ),
+            HarnessKind::Pi => (r#""cacheWrite":30"#, r#""cacheWrite":30,"cacheWrite1h":20"#),
+            _ => continue,
+        };
+        prices(&state, 1.0, false);
+        fixture.write(false, false);
+        let text = fs::read_to_string(&fixture.path).unwrap();
+        assert!(text.contains(split.0), "{kind}");
+        fs::write(&fixture.path, text.replace(split.0, split.1)).unwrap();
+        assert_cost(&fixture, &mut reader, true, Some(0.00027), Complete);
     }
 }

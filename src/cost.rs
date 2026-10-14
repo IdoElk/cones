@@ -277,6 +277,9 @@ pub struct Usage<'a> {
     pub input: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// The part of `cache_write` kept for an hour, which Anthropic charges at twice the input
+    /// rate. The catalog has no rate of its own for it.
+    pub cache_write_1h: u64,
     pub output: u64,
 }
 
@@ -306,11 +309,16 @@ impl Rates {
             return Err("unpriced_model");
         }
         let mut total = 0.0;
+        let short_write = usage
+            .cache_write
+            .checked_sub(usage.cache_write_1h)
+            .ok_or("invalid_usage")?;
         for (tokens, rate) in [
             (usage.input, self.input),
             (usage.output, self.output),
             (usage.cache_read, self.cache_read),
-            (usage.cache_write, self.cache_write),
+            (short_write, self.cache_write),
+            (usage.cache_write_1h, self.input.map(|r| r * 2.0)),
         ] {
             if tokens > 0 {
                 total += tokens as f64 * rate.ok_or("missing_rate")? / 1_000_000.0;
@@ -591,6 +599,7 @@ pub(crate) mod tests {
             input: 30,
             cache_read: 40,
             cache_write: 30,
+            cache_write_1h: 0,
             output: 10,
         };
         assert!((catalog.price(&usage).unwrap() - 0.00025).abs() < 1e-12);
