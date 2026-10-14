@@ -172,8 +172,8 @@ by the [rules of detection](harness.md#discovery), and what finished runs left i
 directories is read as history. Every matching directory on disk is one more history source,
 with no cap or expiry, so a dispatcher that keeps its run directories should remove old ones
 or name a narrower pattern. pi and the harnesses with no home variable refuse a pattern.
-cones already reads the home of a live client started under your own `HOME`, so
-the list is for [sessions detection cannot see](harness.md#discovery).
+cones already reads the home of a live client started under your own `HOME`, and of a live
+Codex run under any `HOME`, so the list is for [sessions detection cannot see](harness.md#discovery).
 
 ## Pane
 

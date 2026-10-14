@@ -80,6 +80,7 @@ pub fn parent(pid: u32) -> Option<u32> {
 pub struct OpenFile {
     pub device: u64,
     pub inode: u64,
+    pub path: Option<PathBuf>,
 }
 
 pub fn open_files(pid: u32) -> io::Result<Vec<OpenFile>> {
@@ -149,6 +150,7 @@ fn open_files_of(pid: u32) -> io::Result<Vec<OpenFile>> {
                 paths.push(OpenFile {
                     device: u64::from(info.vnode.vip_vi.vi_stat.vst_dev),
                     inode: info.vnode.vip_vi.vi_stat.vst_ino,
+                    path: path(&info.vnode),
                 });
             }
         }

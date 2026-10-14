@@ -52,6 +52,29 @@ pub fn home_of(rollout: &Path) -> Option<&Path> {
         .home_of(rollout)
 }
 
+/// The home of the rollout a live client holds open. A `codex exec` run keeps its rollout open
+/// for its whole life, so the file names the run's home whatever `HOME` it was started under.
+#[cfg(target_os = "macos")]
+pub fn open_home(pid: u32) -> Option<PathBuf> {
+    crate::process_info::open_files(pid)
+        .ok()?
+        .into_iter()
+        .filter_map(|file| file.path)
+        .find(|path| {
+            path.extension().is_some_and(|e| e == "jsonl")
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("rollout-"))
+        })
+        .and_then(|path| home_of(&path).map(Path::to_owned))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn open_home(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Process {
     pub pid: u32,

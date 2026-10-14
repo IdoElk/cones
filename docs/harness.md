@@ -27,13 +27,14 @@ which run against the home that recorded the session. A headless run, such as `c
 | Source | Homes |
 | --- | --- |
 | Configured | The directories [`homes`](jobs.md#homes) names for the harness. Needed for sessions that have finished, and for clients started under another `HOME`. |
-| Detected | The home a live client names in its environment, when that client runs under your own `HOME`. cones reads the home from then until it exits; nothing is written to configuration. |
+| Detected | The home a live client names in its environment, when that client runs under your own `HOME`, and the home of the rollout a live Codex client holds open, under any `HOME`. cones reads the home from then until it exits; nothing is written to configuration. |
 
 Detection is off for a harness whose home variable is set where cones runs, and for every
 harness while `CLAUDE_CONFIG_DIR` is set: an override pins what cones reads, and configured
 homes are still added. A client under another `HOME` whose home is not configured belongs to
-another fleet and is not listed. A client whose environment cannot be read is offered to
-every home of its harness: the one holding its conversation names it, and otherwise it is a
+another fleet and is not listed, unless it is a Codex client with a rollout open: `codex exec`
+keeps its rollout open for its whole run, and the file names the home. A client whose
+environment cannot be read is offered to every home of its harness: the one holding its conversation names it, and otherwise it is a
 bare process row. An environment hidden by macOS keeps a process out for its first ten
 seconds. pi hides its environment once it starts, so a pi home is never detected and has to
 be configured. A [`homes` name ending in `*`](jobs.md#homes) is detection too: it is off

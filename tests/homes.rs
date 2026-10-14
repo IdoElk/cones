@@ -237,6 +237,8 @@ fn ids(rows: &[Value]) -> Vec<&str> {
 const OWN: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TASK: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const OTHER: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+/// Live Codex runs are read under any HOME, so concurrent tests see each other's: this one's id is its own.
+const RUN: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
 /// A home `homes.claude` names is read beside Claude's own: its session is a full row, its
 /// conversation is what `cones show` prints, and a stop goes to the home that holds it.
@@ -621,6 +623,61 @@ fn a_headless_codex_run_in_a_configured_home_is_shown_and_stopped() {
         assert!(Instant::now() < deadline, "the stopped run is still alive");
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// A dispatcher's `codex exec` runs under its own HOME and home, which no setting names. The
+/// run holds its rollout open, and that file says which home to read: the run is a full row.
+/// A client under another HOME with no rollout open stays out.
+#[test]
+fn a_codex_run_under_another_home_is_listed_by_its_open_rollout() {
+    let mut f = Fixture::new();
+    let (task, stray) = (f.path().join("seat.x7"), f.path().join("stray"));
+    let elsewhere = f.path().join("elsewhere");
+    let cwd = f.path().canonicalize().unwrap();
+    let day = task.join("sessions/2026/10/14");
+    for dir in [&day, &stray, &elsewhere] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let lines = [
+        json!({"timestamp": now, "type": "session_meta", "payload": {"session_id": RUN, "id": RUN, "timestamp": now, "cwd": cwd, "originator": "codex_exec"}}),
+        json!({"timestamp": now, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}),
+        json!({"timestamp": now, "type": "turn_context", "payload": {"turn_id": "t1", "cwd": cwd, "model": "gpt-5"}}),
+        json!({"timestamp": now, "type": "event_msg", "payload": {"type": "user_message", "message": "update the docs"}}),
+    ];
+    let rollout = day.join(format!("rollout-2026-10-14T07-00-00-{RUN}.jsonl"));
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(&rollout, text).unwrap();
+    let args = ["exec", "--json", "--", "update the docs"];
+    let script = format!(
+        "require('fs').openSync({:?}, 'a'); setTimeout(() => {{}}, 600000)",
+        rollout.to_str().unwrap()
+    );
+    let pid = f.scripted(
+        "codex",
+        &args,
+        &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
+        &script,
+    );
+    let theirs = f.named(
+        "codex",
+        &args,
+        &[("HOME", &elsewhere), ("CODEX_HOME", &stray)],
+    );
+
+    let rows = f.rows_when("codex", |row| row["pid"] == pid);
+    let row = rows.iter().find(|r| r["pid"] == pid).expect("no codex row");
+    assert_eq!(row["session_id"], RUN, "{row}");
+    assert_eq!(row["model"], "gpt-5", "{row}");
+    assert_eq!(row["title"], "update the docs", "{row}");
+    assert_eq!(
+        row["transcript_path"].as_str().map(PathBuf::from),
+        rollout.canonicalize().ok(),
+        "{row}"
+    );
+    let shown = f.ok(&["show", RUN]);
+    assert!(shown.contains("update the docs"), "{shown}");
+    assert!(rows.iter().all(|row| row["pid"] != theirs), "{rows:?}");
 }
 
 /// An npm install runs Codex under a node wrapper that passes its arguments on, so the process

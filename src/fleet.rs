@@ -489,12 +489,14 @@ pub fn own_home_processes(
 }
 
 /// Note the homes live clients of `kinds` run against, so `Home::all` reads them from now on.
-/// Only a client under this user's own `HOME` counts, and only while nothing pins the harness
-/// to one home; see `Home::detects`. A process keeps the environment it started with, so each
-/// is read once, in one `ps` for every harness: a refresh with no new client spawns nothing.
+/// Only a client under this user's own `HOME` counts, a `homes` pattern names, or, for Codex,
+/// holds a rollout open, and only while nothing pins the harness to one home; see
+/// `Home::detects`. A process keeps the environment it started with, so each is read once, in
+/// one `ps` for every harness: a refresh with no new client spawns nothing.
 pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
     type Seen = HashSet<(crate::config::HarnessKind, u32, DateTime<Utc>)>;
     static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
+    static UNNAMED: Mutex<Option<Seen>> = Mutex::new(None);
     let kinds: Vec<_> = kinds
         .iter()
         .map(|&kind| crate::harness::spec(kind))
@@ -515,6 +517,9 @@ pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     let seen = seen.get_or_insert_with(HashSet::new);
     seen.retain(|key| !kinds.iter().any(|spec| spec.kind == key.0) || live.contains(key));
+    let mut unnamed = UNNAMED.lock().unwrap_or_else(|e| e.into_inner());
+    let unnamed = unnamed.get_or_insert_with(HashSet::new);
+    unnamed.retain(|key| live.contains(key));
     let new: Vec<_> = live.iter().filter(|key| !seen.contains(key)).collect();
     let list = new
         .iter()
@@ -537,10 +542,23 @@ pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
         seen.insert(*key);
         let home = &crate::harness::spec(key.0).home;
         let named = |env| home.of_peer(env, &user).or_else(|| home.of_pattern(env));
-        if let Some(found) = env.and_then(named) {
-            home.detected(found);
+        match env.and_then(named) {
+            Some(found) => home.detected(found),
+            None if key.0 == crate::config::HarnessKind::Codex => {
+                unnamed.insert(*key);
+            }
+            None => {}
         }
     }
+    // A Codex run under another HOME that nothing names: the rollout it holds open says which
+    // home it writes. It may not have opened one yet, so ask the kernel again each pass.
+    unnamed.retain(|key| {
+        let Some(found) = crate::codex::open_home(key.1) else {
+            return true;
+        };
+        crate::harness::spec(key.0).home.detected(found);
+        false
+    });
 }
 
 /// `detect_homes` for every harness, for a command that names one session without listing all.
