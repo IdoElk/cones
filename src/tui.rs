@@ -11035,6 +11035,25 @@ impl App {
                     && p.session.forked_from.as_deref() == Some(row.native())
             })
         });
+        // `claude --bg` registers its session before it prints the id that pairs it with the
+        // placeholder. Until the command returns, the placeholder stands in for a new session of
+        // its kind in its folder, so the launch never shows as two rows.
+        data.sessions.retain(|row| {
+            self.data
+                .sessions
+                .iter()
+                .any(|s| s.session_id == row.session_id)
+                || !self.pending.iter().any(|p| {
+                    p.short.is_none()
+                        && p.session.harness == row.harness
+                        && p.session.kind == row.kind
+                        && p.session.cwd == row.cwd
+                        && self
+                            .started
+                            .iter()
+                            .any(|(id, _)| *id == p.session.session_id)
+                })
+        });
         let mut replaced = self.reconcile_launches(&mut data);
         // The coordinator writes its claim seconds after the harness names its session, so the
         // mark the placeholder carried stays on that session until the claim takes over.

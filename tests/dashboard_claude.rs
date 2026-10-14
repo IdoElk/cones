@@ -266,6 +266,66 @@ fn a_composer_launch_becomes_a_listed_background_session_with_its_native_id() {
     d.quit();
 }
 
+/// Claude's daemon can list a background session before `--bg` prints the id that pairs it with
+/// the launch. The list held both rows for that moment: the placeholder and the session.
+#[test]
+fn a_session_listed_before_its_launch_returns_is_one_row() {
+    let mut d = Dashboard::new("claude-launch-early-registry", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    real_project(&d);
+    fs::write(d.home().join("print-delay"), "3").unwrap();
+    d.start();
+    d.wait_text("claude › ");
+    d.typed("count the flaky tests");
+    d.press("enter", b"\r");
+
+    // The registry lists the session while `--bg` is still running; give discovery time to see it.
+    d.wait_for("the session in the registry", |_| !registry(&d).is_empty());
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let early = d.capture("listed-before-launch-returned");
+    assert!(
+        !early.contains("Fixture title for the launch"),
+        "the placeholder stands in until the launch returns:\n{early}"
+    );
+    assert!(early.contains("count the flaky tests"), "{early}");
+
+    d.wait_text("Fixture title for the launch");
+    let launched = d.capture("launched");
+    assert!(!launched.contains("count the flaky tests"), "{launched}");
+
+    // The session's row enters with the refresh that retires the placeholder, not seconds before.
+    let session = registry(&d)[0]["sessionId"].as_str().unwrap().to_owned();
+    let debug = d.wait_file("state/tui-debug.log", |t| {
+        records(t).iter().any(|r| r["event"] == "row.reidentified")
+    });
+    let rows: Vec<_> = records(&debug)
+        .into_iter()
+        .filter(|r| r["event"] == "row.added" || r["event"] == "row.removed")
+        .collect();
+    let added = rows
+        .iter()
+        .position(|r| r["event"] == "row.added" && r["data"]["row_id"] == session.as_str())
+        .expect("the session's row");
+    let removed = rows
+        .iter()
+        .position(|r| {
+            r["event"] == "row.removed"
+                && r["data"]["row_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("starting:"))
+        })
+        .expect("the placeholder retired");
+    let at = |i: usize| {
+        chrono::DateTime::parse_from_rfc3339(rows[i]["timestamp"].as_str().unwrap()).unwrap()
+    };
+    assert!(
+        (at(added) - at(removed)).num_milliseconds().abs() < 500,
+        "{:#?}",
+        &rows[..=added.max(removed)]
+    );
+    d.quit();
+}
+
 /// A `claude` typed in a terminal runs the user's alias, so a launch takes the variables the
 /// alias sets before its command, as Bedrock setups do, but not its flags.
 #[test]

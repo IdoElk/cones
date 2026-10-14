@@ -10,7 +10,8 @@ commands the dashboard ran, and its environment to `$HOME/claude-env.jsonl`. `$H
         foreground start asks Claude's trust question on the pty, and enter trusts the folder,
         lists the session in the registry under the fixture's pid and holds the pty
 `$HOME/registry-delay` holds a `--bg` session's registry entry back that many seconds, the
-way the daemon can take a while to report a session.
+way the daemon can take a while to report a session. `$HOME/print-delay` holds the printed
+background id back instead, the way the daemon can list a session before `--bg` returns.
 `attach` holds the pty as a viewer client until hung up. With `$HOME/fake-attach-fullscreen` it
 draws the composer of Claude's fullscreen renderer (`CLAUDE_CODE_NO_FLICKER=1`): hidden terminal
 cursor, inverse software caret after `❯`. Typed text becomes a draft and every read from the pty
@@ -166,4 +167,7 @@ if delay_file.exists() and os.fork() == 0:
     os._exit(0)
 if not delay_file.exists():
     (registry / f"{daemon.pid}.json").write_text(entry)
+print_delay = HOME / "print-delay"
+if print_delay.exists():
+    time.sleep(float(print_delay.read_text()))
 print(f"backgrounded · {short} (busy)")
