@@ -228,8 +228,11 @@ fn background_stop_names_the_session_home_keeps_the_conversation_and_signals_not
     );
 
     // The installed `claude stop` is idempotent, so a second stop is a second native call whose
-    // success is the CLI's answer and not a cones-side shortcut.
-    assert!(f.stop(id).status.success());
+    // success is the CLI's answer and not a cones-side shortcut. A prefix, as `cones show` takes
+    // one, names the same session.
+    let again = f.stop("aaaaaaaa");
+    assert!(again.status.success(), "{}", text(&again.stderr));
+    assert!(text(&again.stdout).contains(id), "{}", text(&again.stdout));
     assert_eq!(f.calls().lines().count(), 2, "{}", f.calls());
 }
 

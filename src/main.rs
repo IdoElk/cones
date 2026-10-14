@@ -166,7 +166,7 @@ enum Action {
     },
     /// End a session's work and keep its conversation; see docs/cli.md.
     Stop {
-        /// The session id as `cones ls` prints it.
+        /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
         id: String,
     },
     /// A run's captured output; the dashboard opens this in a viewer.

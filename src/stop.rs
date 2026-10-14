@@ -23,6 +23,24 @@ use std::{
 /// End the work `id` names. Returns the line describing what was stopped; every other outcome,
 /// including an unsupported target, is an error.
 pub fn session(state: &Path, claude: &Path, id: &str) -> Result<String> {
+    // An unambiguous prefix of a roster id names that session, as it does for `cones show`.
+    // Anything else, such as a shell's host id, falls through unchanged and must match exactly.
+    let matches: Vec<_> = if id.len() >= crate::show::MIN_PREFIX {
+        crate::fleet::all(claude)?
+            .into_iter()
+            .map(|s| s.session_id)
+            .filter(|s| s.starts_with(id))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ensure!(
+        matches.len() < 2,
+        "{id} matches {} sessions: {}",
+        matches.len(),
+        matches.join(", ")
+    );
+    let id = matches.first().map_or(id, String::as_str);
     // A Codex thread runs in its daemon, so closing a client that shows it would end nothing.
     // Its id is settled here, before any terminal that might be showing it is considered.
     if let Some(thread) = crate::codex::thread(claude, state, id) {
