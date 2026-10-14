@@ -1,84 +1,145 @@
 //! The newest cones the Homebrew tap offers. The dashboard keeps the tap's formula in the
-//! state dir and downloads it again in the background when it is a day old, so drawing
-//! never waits on the network. `start.update_check: false` turns the check off.
+//! state dir and, while it runs, downloads it again in the background once it is a day old,
+//! so drawing never waits on the network. A Homebrew install then upgrades itself with
+//! `brew upgrade cones`, keeping the running version's files, and the next start uses the
+//! new one. `start.update_check: false` turns both off.
 use std::{
     fs,
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{
+        Mutex, Once,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 const FORMULA_URL: &str =
     "https://raw.githubusercontent.com/YuvalSarel1/cones/main/Formula/cones.rb";
 const REFRESH_AFTER: Duration = Duration::from_secs(24 * 3600);
+const PASS_EVERY: Duration = Duration::from_secs(3600);
 
 static NEWER: Mutex<Option<String>> = Mutex::new(None);
+static INSTALLED: Mutex<Option<String>> = Mutex::new(None);
+static ENABLED: AtomicBool = AtomicBool::new(false);
+static WATCH: Once = Once::new();
 
 /// Called at startup and again when the config editor saves `start.update_check`.
 pub fn init(state: &Path, enabled: bool) {
+    ENABLED.store(enabled, Ordering::Relaxed);
     if !enabled {
         *NEWER.lock().unwrap_or_else(|e| e.into_inner()) = None;
         return;
     }
     let path = state.join("formula.rb");
     remember(&path);
-    let age = fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| SystemTime::now().duration_since(t).ok());
-    if age.is_some_and(|a| a < REFRESH_AFTER) {
-        return;
-    }
-    std::thread::spawn(move || {
-        let fetched = Command::new("/usr/bin/curl")
-            .args([
-                "--fail",
-                "--silent",
-                "--proto",
-                "=https",
-                "--connect-timeout",
-                "5",
-                "--max-time",
-                "20",
-                "--max-filesize",
-                "65536",
-                FORMULA_URL,
-            ])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        // An offline check leaves the old formula, so it runs again next start.
-        if let Some(out) = fetched
-            .ok()
-            .filter(|o| o.status.success() && version(&o.stdout).is_some())
-        {
-            let dir = path.parent().unwrap_or(Path::new("."));
-            let saved = crate::private_dir(dir).is_ok()
-                && fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .mode(0o600)
-                    .open(&path)
-                    .and_then(|mut f| f.write_all(&out.stdout))
-                    .is_ok();
-            if saved {
-                remember(&path);
+    WATCH.call_once(|| {
+        std::thread::spawn(move || {
+            loop {
+                if ENABLED.load(Ordering::Relaxed) {
+                    pass(&path);
+                }
+                std::thread::sleep(PASS_EVERY);
             }
-        }
+        });
     });
 }
 
-/// `cones 0.2.3 available`, with Homebrew's command when Homebrew installed this binary.
+/// Refreshes a day-old formula, then installs a newer release Homebrew has not installed yet.
+/// A failed fetch or upgrade changes nothing, so the next pass tries again.
+fn pass(path: &Path) {
+    let age = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| SystemTime::now().duration_since(t).ok());
+    if age.is_none_or(|a| a >= REFRESH_AFTER) {
+        fetch(path);
+    }
+    let newer = NEWER.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let installed = INSTALLED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let (Some(v), Some(prefix)) = (newer, homebrew())
+        && installed.as_ref() != Some(&v)
+        && upgrade(&prefix, &v)
+    {
+        *INSTALLED.lock().unwrap_or_else(|e| e.into_inner()) = Some(v);
+    }
+}
+
+/// `brew upgrade cones` exits 0 when the tap is behind and nothing changed, so success is
+/// the new version's Cellar folder. Cleanup is off: the running dashboard and the terminal
+/// hosts it starts still execute the old version's binary.
+fn upgrade(prefix: &Path, v: &str) -> bool {
+    Command::new(prefix.join("bin/brew"))
+        .args(["upgrade", "cones"])
+        .env("HOMEBREW_NO_INSTALL_CLEANUP", "1")
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+        && prefix.join("Cellar/cones").join(v).is_dir()
+}
+
+/// The Homebrew prefix when Homebrew installed this binary, as `<prefix>/Cellar/cones/<v>/bin`.
+fn homebrew() -> Option<PathBuf> {
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .ok()?;
+    let exe = exe.to_string_lossy();
+    exe.split_once("/Cellar/cones/")
+        .map(|(p, _)| PathBuf::from(p))
+}
+
+fn fetch(path: &Path) {
+    let fetched = Command::new("/usr/bin/curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--proto",
+            "=https",
+            "--connect-timeout",
+            "5",
+            "--max-time",
+            "20",
+            "--max-filesize",
+            "65536",
+            FORMULA_URL,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    // An offline check leaves the old formula, so the next pass tries again.
+    if let Some(out) = fetched
+        .ok()
+        .filter(|o| o.status.success() && version(&o.stdout).is_some())
+    {
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let saved = crate::private_dir(dir).is_ok()
+            && fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .and_then(|mut f| f.write_all(&out.stdout))
+                .is_ok();
+        if saved {
+            remember(path);
+        }
+    }
+}
+
+/// `cones 0.2.3 installed · reopen cones` once Homebrew has it, otherwise `cones 0.2.3
+/// available`, with Homebrew's command when Homebrew installed this binary.
 pub fn notice() -> Option<String> {
     let v = NEWER.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
-    let brew = std::env::current_exe()
-        .and_then(|e| e.canonicalize())
-        .is_ok_and(|e| e.to_string_lossy().contains("/Cellar/cones/"));
-    Some(if brew {
+    if INSTALLED.lock().unwrap_or_else(|e| e.into_inner()).as_ref() == Some(&v) {
+        return Some(format!("cones {v} installed · reopen cones"));
+    }
+    Some(if homebrew().is_some() {
         format!("cones {v} available · brew upgrade cones")
     } else {
         format!("cones {v} available")

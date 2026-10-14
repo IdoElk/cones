@@ -7,9 +7,11 @@
 //! this binary's own version shows no notice; turning "check for updates" off in the config
 //! screen saves `start.update_check: false` and takes the notice away at once, and a
 //! dashboard started with it off shows none. Homebrew's `brew upgrade cones` is offered
-//! only to a binary under a Homebrew Cellar, which a test binary never is.
+//! only to a binary under a Homebrew Cellar. A copy of the binary in a fixture Cellar runs
+//! the prefix's `brew upgrade cones` with cleanup off; once the new version's Cellar folder
+//! exists the notice asks to reopen cones, and when brew fails it offers the command.
 use crate::dashboard::*;
-use std::fs;
+use std::{fs, os::unix::fs::PermissionsExt};
 
 const CTRL_G: &[u8] = b"\x07";
 const ESC: &[u8] = b"\x1b";
@@ -120,6 +122,78 @@ fn turning_the_check_off_hides_the_notice() {
     d.press("ctrl+g", CTRL_G);
     let help = d.wait_text(&format!("help  cones {VERSION}"));
     assert!(!help.contains("available"), "{help}");
+    d.press("esc", ESC);
+    d.wait_text("ctrl+g help");
+    d.quit();
+}
+
+/// Runs the dashboard from `<root>/brew/Cellar/cones/0.0.1/bin/cones` beside a fake
+/// `<root>/brew/bin/brew` that logs its call and runs `script`.
+fn from_homebrew(d: &mut Dashboard, script: &str) {
+    let prefix = d.path("brew");
+    let bin = prefix.join("Cellar/cones/0.0.1/bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    let exe = bin.join("cones");
+    if fs::hard_link(&d.exe, &exe).is_err() {
+        fs::copy(&d.exe, &exe).unwrap();
+    }
+    d.exe = exe;
+    let brew = prefix.join("bin/brew");
+    fs::write(
+        &brew,
+        format!(
+            "#!/bin/sh\necho \"$* cleanup=$HOMEBREW_NO_INSTALL_CLEANUP\" >> {}\n{script}\n",
+            d.path("brew.log").display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(d.path("state/formula.rb"), formula("99.0.0")).unwrap();
+}
+
+#[test]
+fn a_homebrew_install_upgrades_itself_and_asks_to_reopen() {
+    let mut d = Dashboard::new("update-homebrew", &[]);
+    let cellar = d.path("brew/Cellar/cones/99.0.0");
+    from_homebrew(&mut d, &format!("mkdir -p {}", cellar.display()));
+    d.start();
+    let list = d.wait_text("cones 99.0.0 installed · reopen cones");
+    d.capture("list");
+    let navigation = list.lines().find(|l| l.starts_with("Navigation")).unwrap();
+    assert!(
+        navigation.contains("ctrl+g help · cones 99.0.0 installed · reopen cones"),
+        "{list}"
+    );
+    let log = d.wait_file("brew.log", |t| !t.is_empty());
+    d.keep("brew.log");
+    assert_eq!(log, "upgrade cones cleanup=1\n");
+    d.press("ctrl+g", CTRL_G);
+    d.wait_text(&format!(
+        "help  cones {VERSION} · cones 99.0.0 installed · reopen cones"
+    ));
+    d.capture("help");
+    d.press("esc", ESC);
+    d.wait_text("ctrl+g help");
+    d.quit();
+}
+
+#[test]
+fn a_failed_homebrew_upgrade_offers_the_command() {
+    let mut d = Dashboard::new("update-homebrew-failed", &[]);
+    from_homebrew(&mut d, "exit 1");
+    d.start();
+    d.wait_file("brew.log", |t| !t.is_empty());
+    d.keep("brew.log");
+    // Beside the pane the bar has room only for the version; Help's title has the command.
+    let list = d.wait_text("ctrl+g help · cones 99.0.0 available");
+    d.capture("list");
+    assert!(!list.contains("installed"), "{list}");
+    d.press("ctrl+g", CTRL_G);
+    d.wait_text(&format!(
+        "help  cones {VERSION} · cones 99.0.0 available · brew upgrade cones"
+    ));
+    d.capture("help");
     d.press("esc", ESC);
     d.wait_text("ctrl+g help");
     d.quit();

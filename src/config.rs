@@ -586,7 +586,7 @@ pub struct Start {
     /// Fill the meaning index in the background from the moment cones opens.
     #[serde(default)]
     pub index: bool,
-    /// Check the Homebrew tap once a day and announce a newer release.
+    /// Check the Homebrew tap once a day and install or announce a newer release.
     #[serde(default = "yes")]
     pub update_check: bool,
     /// Fewest characters a composer instruction needs to start an agent, as in `claude agents`.

@@ -49,6 +49,8 @@ pub struct Dashboard {
     artifact: PathBuf,
     shots: usize,
     keys: String,
+    /// The binary `start` runs; `cones` under test unless a test places a copy elsewhere.
+    pub exe: PathBuf,
 }
 
 impl Dashboard {
@@ -89,6 +91,7 @@ impl Dashboard {
             artifact,
             shots: 0,
             keys: String::new(),
+            exe: PathBuf::from(env!("CARGO_BIN_EXE_cones")),
         }
     }
 
@@ -150,7 +153,7 @@ impl Dashboard {
         };
         assert_eq!(opened, 0, "openpty");
         let slave = unsafe { OwnedFd::from_raw_fd(slave) };
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cones"));
+        let mut command = Command::new(&self.exe);
         command
             .arg("--debug")
             .current_dir(self.project())

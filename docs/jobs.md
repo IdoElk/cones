@@ -190,7 +190,7 @@ Codex run under any `HOME`, so the list is for [sessions detection cannot see](h
 | `start.pane` | `true` | Open the viewer pane at dashboard startup. |
 | `start.notify` | `false` | Desktop notifications for newly reported input requests and completions outside the focused session. Independent of a job's `notify`. |
 | `start.index` | `false` | Fill the [meaning index](dashboard.md#history) in the background from dashboard startup. |
-| `start.update_check` | `true` | Once a day, read the Homebrew tap's formula from GitHub and announce a newer release in the footer and Help. Off, cones never contacts GitHub for it. |
+| `start.update_check` | `true` | Once a day, read the Homebrew tap's formula from GitHub. A newer release is installed with `brew upgrade cones` for a Homebrew install and announced in the footer and Help. Off, cones never contacts GitHub or runs Homebrew for it. |
 | `start.min_prompt` | `4` | Fewest characters, ignoring surrounding spaces, a [composer](dashboard.md#composer) instruction needs to start an agent; Enter on a shorter one keeps the draft and starts nothing. `claude agents` uses 4. `0` accepts any text. Terminal commands are not affected. |
 
 Harness and pane values apply at startup. Runtime harness and pane keys change the current dashboard; the config editor saves their initial settings for future dashboards. A divider drag changes the current dashboard and saves `pane.ratio` on release. Notification changes take effect on the next configuration refresh.
@@ -322,7 +322,7 @@ State defaults to `~/.cones`; [`--state-dir`](cli.md) relocates it. Directories 
 | --- | --- |
 | `runs.jsonl` | One start and one terminal record per admitted run. Appends hold an exclusive lock; the next append repairs a partial trailing line left by a killed writer. |
 | `prices.json` | Validated models.dev price snapshot with fetch time and SHA-256, refreshed in the background by the dashboard. Contains no session data. |
-| `formula.rb` | The Homebrew tap's formula, downloaded by the dashboard at most once a day. A newer release in it shows `cones <version> available` in the footer and Help. [`start.update_check`](#start) turns it off. |
+| `formula.rb` | The Homebrew tap's formula, downloaded by the dashboard at most once a day. A newer release in it is installed for a Homebrew install and shown in the footer and Help. [`start.update_check`](#start) turns it off. |
 | `forks.json`, `forks.lock` | Confirmed conversation parent links, scoped by harness, native home and directory, with a lock for concurrent writers. See [fork controls](dashboard.md#fork-a-conversation). |
 | `open-folders.json` | Folders the session list keeps open after their last session leaves, including those opened with `+ add folder`. See [Add a folder](dashboard.md#add-a-folder). |
 | `skill/cones/SKILL.md` | The [cones skill](cli.md#dispatching-your-own-workers) as last installed, so an untouched copy can follow upgrades. |

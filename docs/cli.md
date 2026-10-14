@@ -13,7 +13,7 @@ Plain `cones` opens the dashboard. `launch` starts a session in a folder; `run` 
 | `--debug` | off | Append [diagnostics](#diagnostics) to the state directory. |
 | `--trace` | off | Enable debug diagnostics plus input text, commands and individual timing samples. |
 
-`cones --version` prints the version; Help shows it beside its title. Once a day the dashboard reads the Homebrew tap's formula from GitHub and, when it names a newer release, says so in the footer and Help, with `brew upgrade cones` for a Homebrew install. [`start.update_check`](jobs.md#start) turns the check off. The formula is kept as [`formula.rb`](jobs.md#stored-files).
+`cones --version` prints the version; Help shows it beside its title. Once a day, for as long as it runs, the dashboard reads the Homebrew tap's formula from GitHub. When it names a newer release, a Homebrew install runs `brew upgrade cones` in the background and the footer and Help show `cones <version> installed · reopen cones`; the dashboard keeps running its own version until then. Any other install shows `cones <version> available`. If the upgrade fails, the footer offers `brew upgrade cones` and the dashboard tries again an hour later. [`start.update_check`](jobs.md#start) turns the check off. The formula is kept as [`formula.rb`](jobs.md#stored-files).
 
 ## Native CLI lookup
 
