@@ -1455,7 +1455,7 @@ impl HarnessSpec {
 
 /// A variable in an environment as `ps` prints it. Read from the right, because the environment
 /// follows the command line: a prompt that names a variable cannot claim another home.
-fn env_value<'a>(env: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn env_value<'a>(env: &'a str, name: &str) -> Option<&'a str> {
     env.rsplit(' ')
         .find_map(|word| word.strip_prefix(name)?.strip_prefix('='))
         .filter(|value| !value.is_empty())

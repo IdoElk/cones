@@ -52,6 +52,9 @@ and `XDG_DATA_HOME`. Tests of custom configuration set it explicitly on their
 fixture subprocesses.
 Dashboard unit fixtures keep terminal-only clients only when they belong to the
 test process tree. Archive-backed readers retain their explicit fixture homes.
+A Codex stand-in under another `HOME` that holds a rollout open sets
+`CONES_TEST_FLEET`, and so does the cones it tests: a cones without the same
+value, such as the owner's dashboard during a gate, never lists it.
 Integration assertions select every identity they create, including identities
 expected to be excluded, so unrelated live clients cannot change their counts.
 

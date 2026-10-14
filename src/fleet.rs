@@ -486,10 +486,11 @@ pub fn own_home_processes(
             let Some((argv, started)) = argv.get(pid) else {
                 return true;
             };
-            match with_environment.get(pid) {
-                None => with_environment.is_empty(),
-                Some(full) if !full.starts_with(argv.as_str()) => false,
-                Some(full) => match environment(full, argv) {
+            match with_environment.as_ref().map(|read| read.get(pid)) {
+                None => true,
+                Some(None) => false,
+                Some(Some(full)) if !full.starts_with(argv.as_str()) => false,
+                Some(Some(full)) => match environment(full, argv) {
                     None => Utc::now() - *started >= HIDDEN_ENVIRONMENT_WAIT,
                     Some(env) => match home.of_process(env) {
                         None => true,
@@ -543,7 +544,8 @@ pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
         .collect::<Vec<_>>()
         .join(",");
     let argv = pass_argv(ps);
-    let with_environment = process_column(ps, &list, "-wwEp");
+    let with_environment = process_column(ps, &list, "-wwEp").unwrap_or_default();
+    let fleet = std::env::var("CONES_TEST_FLEET").ok();
     for key in new {
         let env = argv.get(&key.1).and_then(|(argv, _)| {
             let full = with_environment.get(&key.1)?;
@@ -560,7 +562,11 @@ pub fn detect_homes(ps: &str, kinds: &[crate::config::HarnessKind]) {
         let named = |env| home.of_peer(env, &user).or_else(|| home.of_pattern(env));
         match env.and_then(named) {
             Some(found) => home.detected(found),
-            None if key.0 == crate::config::HarnessKind::Codex => {
+            // A test's stand-in names its fleet, so a dashboard on the same machine skips it.
+            None if key.0 == crate::config::HarnessKind::Codex
+                && env.and_then(|env| crate::harness::spec::env_value(env, "CONES_TEST_FLEET"))
+                    == fleet.as_deref() =>
+            {
                 unnamed.insert(*key);
             }
             None => {}
@@ -593,11 +599,11 @@ fn environment<'a>(with_environment: &'a str, argv: &str) -> Option<&'a str> {
         .filter(|e| !e.is_empty())
 }
 
-/// pid to the printed column for the listed pids. `ps` exits nonzero when one pid has gone;
-/// the others are still printed, and a missing pid decides nothing.
-fn process_column(ps: &str, list: &str, flags: &str) -> HashMap<u32, String> {
+/// pid to the printed column for the listed pids, or `None` when `ps` could not run. `ps` exits
+/// nonzero when a pid has gone; the others are still printed.
+fn process_column(ps: &str, list: &str, flags: &str) -> Option<HashMap<u32, String>> {
     if list.is_empty() {
-        return HashMap::new();
+        return Some(HashMap::new());
     }
     let out = crate::observe::spawn(
         crate::observe::op::PROCESS_ENV,
@@ -606,14 +612,16 @@ fn process_column(ps: &str, list: &str, flags: &str) -> HashMap<u32, String> {
             .args([flags, list, "-o", "pid=,command="])
             .stdin(Stdio::null()),
     )
-    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    .unwrap_or_default();
-    out.lines()
-        .filter_map(|line| {
-            let (pid, rest) = line.trim_start().split_once(' ')?;
-            Some((pid.parse().ok()?, rest.to_owned()))
-        })
-        .collect()
+    .ok()?;
+    let out = String::from_utf8_lossy(&out.stdout);
+    Some(
+        out.lines()
+            .filter_map(|line| {
+                let (pid, rest) = line.trim_start().split_once(' ')?;
+                Some((pid.parse().ok()?, rest.to_owned()))
+            })
+            .collect(),
+    )
 }
 
 /// Shared parser for the OS command above: pid, UTC lstart, then the complete argv.
@@ -2923,6 +2931,15 @@ mod tests {
             "re-exec'd, gone and freshly hidden pids wait; a hidden environment that has run \
              for a while still keeps its pid"
         );
+        // The only pid listed went: `ps` printed nothing, which is not a failed read. A fixture
+        // OpenCode client that exited this way flickered through the owner's dashboard.
+        let alone = own_home_processes(
+            ps.to_str().unwrap(),
+            crate::config::HarnessKind::Pi,
+            &crate::pi::home(&claude_dir().unwrap()),
+            &[4202],
+        );
+        assert!(alone.is_empty(), "{alone:?}");
     }
 
     /// `lstart` is locale text. Under a non-English `LANG` ps prints its own month names, so
@@ -2943,7 +2960,10 @@ mod tests {
             "the whole table is read in one locale and one timezone"
         );
         assert_eq!(
-            process_column(ps, "1", "-wwEp").get(&1).map(|e| e.trim()),
+            process_column(ps, "1", "-wwEp")
+                .unwrap()
+                .get(&1)
+                .map(|e| e.trim()),
             Some(PS_LOCALE),
             "and so is the environment read, or a non-ASCII command line is spelled two ways"
         );

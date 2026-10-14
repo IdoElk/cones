@@ -107,7 +107,8 @@ impl Fixture {
             .arg("-")
             .args(args)
             .current_dir(self.path().canonicalize().unwrap())
-            .stdin(Stdio::piped());
+            .stdin(Stdio::piped())
+            .env("CONES_TEST_FLEET", self.path());
         for (name, value) in env {
             command.env(name, value);
         }
@@ -185,6 +186,7 @@ impl Fixture {
     fn cones(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_cones"))
             .env("HOME", self.path())
+            .env("CONES_TEST_FLEET", self.path())
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("CODEX_HOME")
             .env_remove("PI_CODING_AGENT_DIR")
@@ -700,6 +702,21 @@ fn a_codex_run_under_another_home_is_listed_by_its_open_rollout() {
     let shown = f.ok(&["show", RUN]);
     assert!(shown.contains("update the docs"), "{shown}");
     assert!(rows.iter().all(|row| row["pid"] != theirs), "{rows:?}");
+
+    // The user's own dashboard on this machine is outside the test's fleet: it never lists
+    // the stand-in, or every gate run flickers rows into it.
+    let outside = Command::new(env!("CARGO_BIN_EXE_cones"))
+        .env("HOME", f.path())
+        .env_remove("CONES_TEST_FLEET")
+        .env_remove("CODEX_HOME")
+        .args(["--jobs", f.path().join("jobs.yaml").to_str().unwrap()])
+        .args(["--state-dir", f.path().join("outside").to_str().unwrap()])
+        .args(["ls", "--json"])
+        .output()
+        .unwrap();
+    let listed = String::from_utf8_lossy(&outside.stdout);
+    assert!(outside.status.success(), "{outside:?}");
+    assert!(!listed.contains(RUN), "{listed}");
 }
 
 /// An npm install runs Codex under a node wrapper that passes its arguments on, so the process
