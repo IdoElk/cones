@@ -94,6 +94,7 @@ const ORANGE: Color = Color::Indexed(208);
 const SELECTION: Color = Color::Rgb(0x32, 0x4e, 0x75);
 const QUIT_CONFIRM: Duration = Duration::from_millis(1500);
 const QUIT_HINT: &str = "ctrl+c again quits · any other key stays";
+const ESC_QUIT_HINT: &str = "esc again quits · any other key stays";
 /// Repeated endpoints slow the pulse. Use ▇ because █ touches the row above.
 const SPINNER: [&str; 16] = [
     "▁", "▁", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "▇", "▇", "▆", "▅", "▄", "▃", "▂",
@@ -8940,7 +8941,8 @@ struct App {
     create_folder: Option<PathBuf>,
     armed_at: Instant,
     /// Require a second ctrl+c so an interrupt aimed at a closing viewer cannot quit the dashboard.
-    quit_armed: Option<Instant>,
+    /// When quit was armed, and the hint naming the key that armed it.
+    quit_armed: Option<(Instant, &'static str)>,
     log: Option<Diagnostics>,
     dashboard_id: String,
     timing_summary: RefCell<BTreeMap<String, TimingSummary>>,
@@ -13216,10 +13218,11 @@ impl App {
             // Two spans, so a strip too narrow for the whole hint drops its tail the way it
             // drops a key instead of losing the warning altogether.
             let red = Style::default().fg(Color::Red);
-            let cut = QUIT_HINT.find(" · ").unwrap_or(QUIT_HINT.len());
+            let hint = self.quit_hint();
+            let cut = hint.find(" · ").unwrap_or(hint.len());
             vec![
-                Span::styled(&QUIT_HINT[..cut], red),
-                Span::styled(&QUIT_HINT[cut..], red),
+                Span::styled(&hint[..cut], red),
+                Span::styled(&hint[cut..], red),
             ]
         } else {
             vec![
@@ -14826,10 +14829,10 @@ impl App {
         }
         if self
             .quit_armed
-            .is_some_and(|at| at.elapsed() >= QUIT_CONFIRM)
+            .is_some_and(|(at, _)| at.elapsed() >= QUIT_CONFIRM)
         {
             self.quit_armed = None;
-            if self.status == QUIT_HINT {
+            if self.status == QUIT_HINT || self.status == ESC_QUIT_HINT {
                 self.status.clear();
             }
         }
@@ -14837,7 +14840,7 @@ impl App {
 
     fn quitting(&self) -> bool {
         self.quit_armed
-            .is_some_and(|at| at.elapsed() < QUIT_CONFIRM)
+            .is_some_and(|(at, _)| at.elapsed() < QUIT_CONFIRM)
     }
 
     fn delete_job(&mut self, name: String) {
@@ -15730,17 +15733,21 @@ impl App {
         }
     }
 
-    /// A ctrl+c press: true when it is the second within the confirmation window.
-    fn quit_press(&mut self) -> bool {
-        if self
-            .quit_armed
-            .replace(Instant::now())
-            .is_some_and(|at| at.elapsed() < QUIT_CONFIRM)
-        {
+    /// A quitting press of the key `hint` names: true when the same key armed quit within
+    /// the confirmation window.
+    fn quit_press(&mut self, hint: &'static str) -> bool {
+        let again = self.quitting() && self.quit_hint() == hint;
+        self.quit_armed = Some((Instant::now(), hint));
+        if again {
             return true;
         }
-        self.status = QUIT_HINT.into();
+        self.status = hint.into();
         false
+    }
+
+    /// The armed quit's hint, naming the key that armed it.
+    fn quit_hint(&self) -> &'static str {
+        self.quit_armed.map_or(QUIT_HINT, |(_, hint)| hint)
     }
 
     /// Route input to the active mode or viewer; return true to quit the dashboard.
@@ -15780,7 +15787,7 @@ impl App {
             // them, and Claude Code's first one drops to the agents list. It is the
             // dashboard's quit key here as it is from the list; esc interrupts the client.
             if action == KeyAction::Quit {
-                return Ok(self.quit_press());
+                return Ok(self.quit_press(QUIT_HINT));
             }
             if matches!(action, KeyAction::PageUp | KeyAction::PageDown) {
                 let page = i32::from(open.viewer.screen().size().0.saturating_sub(1));
@@ -15842,7 +15849,7 @@ impl App {
         }
         if self.transcript.focused {
             if action == KeyAction::Quit {
-                return Ok(self.quit_press());
+                return Ok(self.quit_press(QUIT_HINT));
             }
             if self.transcript.inspector.is_some() {
                 match action {
@@ -16143,7 +16150,7 @@ impl App {
                 }
                 match action {
                     KeyAction::Quit => {
-                        if self.quit_press() {
+                        if self.quit_press(QUIT_HINT) {
                             return Ok(true);
                         }
                     }
@@ -16179,7 +16186,7 @@ impl App {
                             self.images.clear();
                         } else if self.jobs_view {
                             self.leave_jobs();
-                        } else {
+                        } else if self.quit_press(ESC_QUIT_HINT) {
                             return Ok(true);
                         }
                     }
@@ -16439,7 +16446,7 @@ impl App {
 
     fn transcript_hints(&self) -> Line<'static> {
         if self.quitting() {
-            return Line::styled(QUIT_HINT, Style::default().fg(Color::Red));
+            return Line::styled(self.quit_hint(), Style::default().fg(Color::Red));
         }
         if let Mode::Pick(_) = self.mode {
             return self.mode_hints(0);
@@ -21128,14 +21135,14 @@ states:
         };
         assert!(red(&t, "─"), "the composer's rules are red");
         assert!(red(&t, "q"), "the hint is red");
-        app.quit_armed = Some(Instant::now() - QUIT_CONFIRM);
+        app.quit_armed = Some((Instant::now() - QUIT_CONFIRM, QUIT_HINT));
         app.expire();
         assert!(app.quit_armed.is_none() && app.status.is_empty());
         t.draw(|f| app.draw(f)).unwrap();
         assert!(!red(&t, "─"), "the rules are dim again");
         assert!(!c(&mut app), "one ctrl+c only arms");
         assert!(c(&mut app), "the second quits");
-        app.quit_armed = Some(Instant::now() - QUIT_CONFIRM);
+        app.quit_armed = Some((Instant::now() - QUIT_CONFIRM, QUIT_HINT));
         assert!(!c(&mut app), "a stale arm is a first press again");
     }
 

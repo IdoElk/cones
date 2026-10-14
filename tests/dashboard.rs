@@ -351,6 +351,14 @@ impl Dashboard {
     pub fn quit(&mut self) {
         self.press("ctrl+c", b"\x03");
         self.press("ctrl+c", b"\x03");
+        self.wait_exit();
+    }
+
+    pub fn running(&mut self) -> bool {
+        self.child.as_mut().unwrap().try_wait().unwrap().is_none()
+    }
+
+    pub fn wait_exit(&mut self) {
         let child = self.child.as_mut().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while child.try_wait().unwrap().is_none() {

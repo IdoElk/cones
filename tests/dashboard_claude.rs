@@ -19,6 +19,7 @@ use std::{
 };
 
 const DOWN: &[u8] = b"\x1b[B";
+const ESC: &[u8] = b"\x1b";
 const UP: &[u8] = b"\x1b[A";
 const SHIFT_TAB: &[u8] = b"\x1b[Z";
 const CTRL_F: &[u8] = b"\x06";
@@ -596,6 +597,34 @@ fn existing_sessions_group_navigate_filter_pin_and_highlight() {
     assert!(row(&screen, "Rest a while") > row(&screen, &project.display().to_string()));
     assert_eq!(fs::read_to_string(d.path("state/pins.json")).unwrap(), "[]");
     d.quit();
+}
+
+/// The 2026-10-14 report: one Esc on a session row, with nothing to clear, closed the dashboard.
+#[test]
+fn esc_on_a_session_row_quits_only_when_pressed_twice() {
+    let mut d = Dashboard::new("claude-esc-quit", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    let project = real_project(&d);
+    let mut done = seed(&d, &project, 1, "Ship the fix", "idle", None);
+    d.start();
+    let screen = d.wait_text(&format!("fixture attached to {}", done.short));
+    assert!(selected(&screen).contains("Ship the fix"), "{screen}");
+
+    d.press("esc", ESC);
+    let screen = d.wait_text("esc again quits");
+    d.capture("armed");
+    assert!(d.running(), "one esc only arms:\n{screen}");
+    // Each key arms its own quit, so a ctrl+c and then an Esc keep the dashboard open.
+    d.press("ctrl+c", b"\x03");
+    let screen = d.wait_text("ctrl+c again quits");
+    assert!(d.running(), "ctrl+c after esc arms its own quit:\n{screen}");
+    d.press("esc", ESC);
+    let screen = d.wait_text("esc again quits");
+    assert!(d.running(), "esc after ctrl+c arms its own quit:\n{screen}");
+    d.press("esc", ESC);
+    d.wait_exit();
+    done.daemon.kill().unwrap();
+    done.daemon.wait().unwrap();
 }
 
 #[test]

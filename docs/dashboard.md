@@ -31,7 +31,7 @@ a separate setting.
 | `→` | With an empty composer, enter the pane or open the session fullscreen if the pane is off. |
 | `ctrl+z` | Return from a viewer or screen to the list. |
 | `ctrl+\` | Toggle the pane; in a focused screen, switch split/fullscreen. Also `ctrl+4`. |
-| `esc` | Cancel the current action or draft, then back out. Native viewers receive Escape. |
+| `esc` | Cancel the current action or draft, then back out; with nothing left, a second press within 1.5 seconds quits. Native viewers receive Escape. |
 | `ctrl+c twice` | Quit within 1.5 seconds from the list or an agent viewer. Shell viewers keep Ctrl+C for interrupts. |
 | `ctrl+o` | Open the selected harness's [launch settings](#launch-settings). |
 | `ctrl+d` | Start the [coordinator](cli.md#coordinator) for the selected folder; refuse an existing live coordinator. |
