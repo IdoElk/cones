@@ -125,9 +125,10 @@ impl Fixture {
                 | HarnessKind::Amp
                 | HarnessKind::Droid
                 | HarnessKind::Kimi => unreachable!("no native archive"),
+                // Claude writes no provider: the `msg_` id says Anthropic served the reply.
                 HarnessKind::Claude => json!({
                     "type":"assistant","timestamp":AT,
-                    "message":{"id":id,"provider":"provider","model":model,
+                    "message":{"id":format!("msg_0{n}"),"model":model,
                         "usage":{"input_tokens":30,"cache_read_input_tokens":40,
                             "cache_creation_input_tokens":30,"output_tokens":10},
                         "content":[{"type":"text","text":"Done"}]}
@@ -295,6 +296,9 @@ fn prices(state: &Path, factor: f64, expired: bool) {
     let mut catalog = cost::Catalog::parse(&serde_json::to_vec(&json!({
         "provider":{"models":{"model":{"cost":{
             "input":2.0*factor,"output":8.0*factor,"cache_read":0.5*factor,"cache_write":3.0*factor
+        }}}},
+        "anthropic":{"models":{"model":{"cost":{
+            "input":2.0*factor,"output":8.0*factor,"cache_read":0.5*factor,"cache_write":3.0*factor
         }}}}
     })).unwrap(), Utc::now()).unwrap();
     if expired {
@@ -397,6 +401,13 @@ fn every_registered_harness_inherits_fallback_precedence_coverage_and_cache_refr
                 assert_cost(&fixture, &mut reader, true, Some(0.0), Complete);
             }
             HarnessKind::Pi | HarnessKind::Codex => {}
+        }
+        if kind == HarnessKind::Claude {
+            // A Bedrock reply is not priced from Anthropic's table: Bedrock keys its own ids.
+            fs::remove_file(fixture.home.join(format!("statusline/{ID}.json"))).unwrap();
+            let text = fs::read_to_string(&fixture.path).unwrap();
+            fs::write(&fixture.path, text.replace("msg_0", "msg_bdrk_0")).unwrap();
+            assert_cost(&fixture, &mut reader, true, None, Unavailable);
         }
         if matches!(kind, HarnessKind::Pi | HarnessKind::Opencode) {
             fixture.write(true, true);

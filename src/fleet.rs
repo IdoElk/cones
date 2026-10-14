@@ -306,6 +306,16 @@ pub fn sessions(claude: &Path) -> Result<Vec<Session>> {
 
 const ANTHROPIC: &str = "anthropic";
 
+/// The endpoint that served a Claude reply, from its id: Bedrock and Vertex mark the ids of
+/// the responses they serve, and Anthropic's own are plain `msg_` ids.
+fn endpoint(id: &str) -> &'static str {
+    match id.split('_').nth(1) {
+        Some("bdrk") => "bedrock",
+        Some("vrtx") => "vertex",
+        _ => ANTHROPIC,
+    }
+}
+
 /// The plan of the account Claude is signed in to: `oauthAccount.organizationType` without its
 /// `claude_` prefix, such as `max`, or `api` when no account is signed in. Claude keeps
 /// `.claude.json` inside a custom config folder, else beside the default one, and the default
@@ -1311,9 +1321,15 @@ impl Adapter for CostAdapter {
             .iter()
             .all(|k| usage[k].as_u64() == Some(0)),
             usage: (|| {
-                // Never infer the endpoint from the model or local settings.
+                // Never infer the endpoint from the model or local settings. Claude writes no
+                // provider, but the reply's id names the endpoint that served it. Bedrock and
+                // Vertex key their prices by their own model ids, which the transcript lacks.
                 let provider = message["provider"]
                     .as_str()
+                    .or_else(|| {
+                        let id = message["id"].as_str()?;
+                        (id.starts_with("msg_") && endpoint(id) == ANTHROPIC).then_some(ANTHROPIC)
+                    })
                     .ok_or("missing_provider_or_model")?;
                 let model = message["model"]
                     .as_str()
@@ -1507,14 +1523,7 @@ fn report_with_activity(
         }
         if let Some(id) = message["id"].as_str() {
             // Bedrock and Vertex mark the ids of the responses they serve.
-            r.plan = Some(
-                match id.split('_').nth(1) {
-                    Some("bdrk") => "bedrock",
-                    Some("vrtx") => "vertex",
-                    _ => ANTHROPIC,
-                }
-                .into(),
-            );
+            r.plan = Some(endpoint(id).into());
             if !seen.insert(id.to_owned()) {
                 continue;
             }

@@ -224,8 +224,10 @@ provider/model and disjoint usage counters with cached prices. Zero response cos
 explicitly empty usage because some harnesses write zero for unpriced responses. Duplicate
 response ids count once. Missing identities, counters or prices leave gaps.
 
-Claude usually lacks transcript provider identity and needs its saved statusLine cost; cones
-does not infer a provider from settings or model names. Codex prices requests at their own
+Claude writes no provider into its transcript. A reply's id names the endpoint that served it,
+so a first-party `msg_` reply is priced as Anthropic's; a Bedrock or Vertex reply needs the saved
+statusLine cost, because those catalogs key prices by model ids the transcript does not carry.
+cones does not infer a provider from settings or model names. Codex prices requests at their own
 model/input size, counts cumulative updates once and includes reasoning in output. OpenCode
 adds its separately stored reasoning to output and requires all five native counters for
 fallback pricing. Reported nonstandard Codex service tiers and long-retention Claude/pi cache
