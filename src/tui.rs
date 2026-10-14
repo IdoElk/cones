@@ -16769,9 +16769,12 @@ impl App {
         let rules = if self.status.starts_with(WARNING) {
             rules.title(Span::styled(
                 format!(" {} ", self.status),
+                // The title inherits the dim rule, which turned the warning a muddy grey.
                 Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+                    .remove_modifier(Modifier::DIM),
             ))
         } else {
             rules

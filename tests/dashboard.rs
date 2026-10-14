@@ -213,6 +213,11 @@ impl Dashboard {
 
     /// The foreground colour of the first cell of the first `text` on the screen.
     pub fn colour_of(&self, text: &str) -> Option<vt100::Color> {
+        self.cell_of(text).map(|c| c.fgcolor())
+    }
+
+    /// The first cell of the first `text` on the screen.
+    pub fn cell_of(&self, text: &str) -> Option<vt100::Cell> {
         let parser = self.screen.lock().unwrap();
         let screen = parser.screen();
         for row in 0..ROWS {
@@ -229,7 +234,7 @@ impl Dashboard {
                 }
             }
             if let Some(at) = line.find(text) {
-                return screen.cell(row, cols[at]).map(|c| c.fgcolor());
+                return screen.cell(row, cols[at]).cloned();
             }
         }
         None

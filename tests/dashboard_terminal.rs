@@ -343,6 +343,12 @@ fn a_second_terminal_opens_beside_the_first_and_ctrl_x_twice_stops_only_one() {
             .any(|l| l.starts_with(" ⚠ ctrl+ס") && l.contains('─')),
         "the layout warning sits on the composer rule: {screen}"
     );
+    let mark = d.cell_of("⚠ ctrl+ס").unwrap();
+    assert_eq!(
+        (mark.bgcolor(), mark.bold(), mark.dim()),
+        (vt100::Color::Idx(3), true, false),
+        "the layout warning is drawn bold on yellow, not dimmed with the rule"
+    );
     d.capture("hebrew-layout-warning");
     d.press("ctrl+x", CTRL_X);
     d.press("ctrl+x", CTRL_X);
