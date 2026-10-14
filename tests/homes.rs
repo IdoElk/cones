@@ -625,6 +625,28 @@ fn a_headless_codex_run_in_a_configured_home_is_shown_and_stopped() {
     }
 }
 
+/// A prompt is whatever bytes its author wrote. One with an em dash or an accent is listed
+/// and titled as written, like an ASCII one.
+#[test]
+fn a_codex_run_whose_prompt_is_not_ascii_is_listed() {
+    let mut f = Fixture::new();
+    let (task, elsewhere) = (f.path().join("seat-utf8"), f.path().join("elsewhere"));
+    for dir in [&task, &elsewhere] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let pid = f.stand_in(
+        "codex",
+        &["exec", "--", "reply done — café"],
+        &[("HOME", &elsewhere), ("CODEX_HOME", &task)],
+    );
+    let home = format!("[\"{}\"]", task.canonicalize().unwrap().display());
+    f.ok(&["config", "set", "homes.codex", &home]);
+
+    let rows = f.rows_when("codex", |row| row["pid"] == pid);
+    let row = rows.iter().find(|r| r["pid"] == pid).expect("no codex row");
+    assert_eq!(row["title"], "reply done — café", "{row}");
+}
+
 /// A dispatcher's `codex exec` runs under its own HOME and home, which no setting names. The
 /// run holds its rollout open, and that file says which home to read: the run is a full row.
 /// A client under another HOME with no rollout open stays out.

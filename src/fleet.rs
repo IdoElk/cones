@@ -343,6 +343,12 @@ pub fn contains(folder: &Path, path: &Path) -> bool {
     path == folder || path.starts_with(&folder)
 }
 
+/// The locale every `ps` read here runs under: English month names, and a command line's
+/// bytes as they are. Under `C`, `ps` escapes a non-ASCII byte as `M-b`, so the table and the
+/// environment read under the user's locale spelled one prompt two ways, and a run whose
+/// prompt held an em dash looked like a pid whose command line changed and was dropped.
+const PS_LOCALE: &str = "C.UTF-8";
+
 /// The whole process table, which is how Codex and pi clients are discovered at all.
 ///
 /// An unreadable table is an error, never an empty one: an empty table means the harness has
@@ -356,7 +362,7 @@ pub fn process_table(ps: &str) -> Result<String> {
             .env("TZ", "UTC")
             // lstart is locale text: under a non-English LANG ps prints its own month names,
             // which never match the start a harness recorded, so every live session is dropped.
-            .env("LC_ALL", "C")
+            .env("LC_ALL", PS_LOCALE)
             .args(["-axww", "-o", "pid=,lstart=,command="])
             .stdin(Stdio::null()),
     )
@@ -586,6 +592,7 @@ fn process_column(ps: &str, list: &str, flags: &str) -> HashMap<u32, String> {
     let out = crate::observe::spawn(
         crate::observe::op::PROCESS_ENV,
         Command::new(ps)
+            .env("LC_ALL", PS_LOCALE)
             .args([flags, list, "-o", "pid=,command="])
             .stdin(Stdio::null()),
     )
@@ -692,7 +699,7 @@ fn starts_from(ps: &str, pids: impl Iterator<Item = u64>) -> Result<HashMap<u32,
             .env("TZ", "UTC")
             // lstart is locale text: under a non-English LANG ps prints its own month names,
             // which never match the start a harness recorded, so every live session is dropped.
-            .env("LC_ALL", "C")
+            .env("LC_ALL", PS_LOCALE)
             .args(["-o", "pid=,lstart=", "-p", &list])
             .stdin(Stdio::null()),
     )
@@ -2923,15 +2930,20 @@ mod tests {
         let ps = ps.to_str().unwrap();
         assert_eq!(
             process_table(ps).unwrap().trim(),
-            "1 C UTC",
+            format!("1 {PS_LOCALE} UTC"),
             "the whole table is read in one locale and one timezone"
+        );
+        assert_eq!(
+            process_column(ps, "1", "-wwEp").get(&1).map(|e| e.trim()),
+            Some(PS_LOCALE),
+            "and so is the environment read, or a non-ASCII command line is spelled two ways"
         );
         assert_eq!(
             starts_from(ps, [1u64].into_iter())
                 .unwrap()
                 .get(&1)
                 .map(String::as_str),
-            Some("C UTC"),
+            Some(format!("{PS_LOCALE} UTC").as_str()),
             "and so are the starts of named pids"
         );
     }
