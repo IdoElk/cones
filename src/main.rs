@@ -710,7 +710,33 @@ fn execute(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Action::Stop { id } => {
-            print!("{}", cones::stop::session(&state, &claude, &id)?);
+            // An unambiguous prefix of an id `cones ls` prints names that session, as it does for
+            // `cones show`. Anything else must match exactly.
+            let mut matches: Vec<_> = if id.len() >= 4 {
+                cones::tui::fleet_rows(
+                    &claude,
+                    &state,
+                    &Ledger::new(&state)?.runs()?,
+                    &config::defaults(&jobs_path),
+                )?
+                .into_iter()
+                .map(|s| s.session_id)
+                .filter(|s| s.starts_with(&id))
+                .collect()
+            } else {
+                Vec::new()
+            };
+            // Rows sharing one id are the same name; which of them it means is the stop's call.
+            matches.sort();
+            matches.dedup();
+            ensure!(
+                matches.len() < 2,
+                "{id} matches {} sessions: {}",
+                matches.len(),
+                matches.join(", ")
+            );
+            let id = matches.first().unwrap_or(&id);
+            print!("{}", cones::stop::session(&state, &claude, id)?);
             Ok(0)
         }
         Action::Skill { name } => {
