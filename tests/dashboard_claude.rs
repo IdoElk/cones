@@ -1794,6 +1794,33 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
             "{key} is not under the row:\n{screen}"
         );
     }
+    // Each group names itself once, ahead of its first short value; long values follow.
+    for (group, first) in [
+        ("agent", "harness"),
+        ("usage", "tokens"),
+        ("time", "started"),
+        ("process", "pid"),
+        ("source", "forked"),
+        ("reply", "last"),
+    ] {
+        assert!(
+            details.lines().any(|l| l
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|w| w == [group, first])),
+            "no {group} group led by {first}:\n{details}"
+        );
+    }
+    let style = |text: &str| {
+        let c = d.cell_of(text).unwrap();
+        (c.bold(), c.dim())
+    };
+    assert_eq!(
+        [style("agent"), style("harness"), style("claude bg")],
+        [(true, false), (false, true), (false, false)],
+        "group names are bold, keys dim and values at full brightness"
+    );
 
     // Moving folds the details and still moves: down lands on the next session.
     d.press("down", DOWN);

@@ -2284,7 +2284,8 @@ fn session_cells(
 }
 
 /// Every column a session row can show, then what none of them does, as `key value` pairs
-/// packed into as many columns as fit. A value too long for a column gets its own line.
+/// sorted into labelled groups and packed into as many columns as fit. A value too long for a
+/// column gets its own line.
 fn detail_rows(s: &Session, activity: &config::Activity, width: usize) -> Vec<Row> {
     const INDENT: &str = "    ";
     const GAP: usize = 3;
@@ -2335,15 +2336,31 @@ fn detail_rows(s: &Session, activity: &config::Activity, width: usize) -> Vec<Ro
             ),
         ),
     ]);
+    const GROUPS: [(&str, &[&str]); 6] = [
+        (
+            "agent",
+            &["harness", "state", "model", "effort", "plan", "bypass"],
+        ),
+        ("usage", &["tokens in/out", "context", "cost", "activity"]),
+        ("time", &["started", "age", "last active"]),
+        ("process", &["pid", "cpu", "memory", "children", "tasks"]),
+        (
+            "source",
+            &["id", "forked from", "folder", "branch", "transcript"],
+        ),
+        ("reply", &["last reply"]),
+    ];
     let wide = |t: &str| Span::raw(t).width();
     let key = pairs.iter().map(|(k, _)| wide(k)).max().unwrap_or(0);
-    let (short, long): (Vec<_>, Vec<_>) =
-        pairs.into_iter().partition(|(_, (v, _))| wide(v) <= SHORT);
-    let value = short.iter().map(|(_, (v, _))| wide(v)).max().unwrap_or(0);
-    let room = width.saturating_sub(INDENT.len());
-    let per = ((room + GAP) / (key + 1 + value + GAP)).max(1);
+    let label = GROUPS.iter().map(|(g, _)| wide(g)).max().unwrap_or(0) + GAP;
+    let room = width.saturating_sub(INDENT.len() + label);
     let pair = |k: &str, (v, style): (String, Style), pad: usize| {
-        let style = if v == "-" { dim() } else { style };
+        // Values print at full brightness against dim keys; a missing one stays dim.
+        let style = match v.as_str() {
+            "-" => dim(),
+            _ if style == dim() => plain(),
+            _ => style,
+        };
         [
             (format!("{k}{} ", " ".repeat(key - wide(k))), dim()),
             (
@@ -2352,32 +2369,52 @@ fn detail_rows(s: &Session, activity: &config::Activity, width: usize) -> Vec<Ro
             ),
         ]
     };
-    let mut rows: Vec<Row> = short
-        .chunks(per)
-        .map(|line| {
-            let mut cells = vec![(INDENT.to_owned(), plain())];
-            for (n, (k, v)) in line.iter().cloned().enumerate() {
-                let pad = if n + 1 < line.len() { value + GAP } else { 0 };
-                cells.extend(pair(k, v, pad));
+    let mut grouped: Vec<(&str, Vec<_>)> = Vec::new();
+    for (group, keys) in GROUPS {
+        let mut members = Vec::new();
+        for k in keys {
+            if let Some(i) = pairs.iter().position(|(p, _)| p == k) {
+                members.push(pairs.remove(i));
             }
-            Row {
+        }
+        grouped.push((group, members));
+    }
+    // ponytail: a column added to config::COLUMNS shows under agent until GROUPS names it.
+    grouped[0].1.extend(pairs);
+    let mut rows = Vec::new();
+    for (group, members) in grouped {
+        let (short, long): (Vec<_>, Vec<_>) = members
+            .into_iter()
+            .partition(|(_, (v, _))| wide(v) <= SHORT);
+        // Value columns fit their own group, so one wide sparkline does not unpack the rest.
+        let value = short.iter().map(|(_, (v, _))| wide(v)).max().unwrap_or(0);
+        let per = ((room + GAP) / (key + 1 + value + GAP)).max(1);
+        let lines = short
+            .chunks(per)
+            .map(|line| {
+                let mut cells = Vec::new();
+                for (n, (k, v)) in line.iter().cloned().enumerate() {
+                    let pad = if n + 1 < line.len() { value + GAP } else { 0 };
+                    cells.extend(pair(k, v, pad));
+                }
+                cells
+            })
+            .chain(long.into_iter().map(|(k, (v, style))| {
+                pair(k, (clip(&v, room.saturating_sub(key + 1).max(1)), style), 0).to_vec()
+            }));
+        for (n, line) in lines.enumerate() {
+            let name = if n == 0 { group } else { "" };
+            let mut cells = vec![
+                (INDENT.to_owned(), plain()),
+                (format!("{name}{}", " ".repeat(label - wide(name))), bold()),
+            ];
+            cells.extend(line);
+            rows.push(Row {
                 kind: Kind::Detail,
                 cells,
-            }
-        })
-        .collect();
-    rows.extend(long.into_iter().map(|(k, (v, style))| {
-        let mut cells = vec![(INDENT.to_owned(), plain())];
-        cells.extend(pair(
-            k,
-            (clip(&v, room.saturating_sub(key + 1).max(1)), style),
-            0,
-        ));
-        Row {
-            kind: Kind::Detail,
-            cells,
+            });
         }
-    }));
+    }
     rows
 }
 
