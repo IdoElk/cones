@@ -1728,3 +1728,94 @@ fn a_wheel_flood_reaches_the_pane_whole_in_a_few_frames() {
         s.daemon.wait().unwrap();
     }
 }
+
+#[test]
+fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
+    let mut d = Dashboard::new("claude-details", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    let project = real_project(&d);
+    let mut fix = seed(&d, &project, 1, "Fix the parser", "busy", None);
+    let mut rest = seed(&d, &project, 2, "Rest a while", "idle", None);
+    d.start();
+    let screen = d.wait_text(&format!("fixture attached to {}", fix.short));
+    assert!(selected(&screen).contains("Fix the parser"), "{screen}");
+    assert!(
+        !screen.contains(&fix.id),
+        "folded rows show no id:\n{screen}"
+    );
+
+    d.press("left", b"\x1b[D");
+    let screen = d.wait_text(&fix.id);
+    d.capture("unfolded");
+    let lines: Vec<&str> = screen.lines().collect();
+    let (title, next) = (row(&screen, "Fix the parser"), row(&screen, "Rest a while"));
+    let details = lines[title + 1..next].join("\n");
+    for (key, value) in [
+        ("id", fix.id.clone()),
+        ("pid", fix.daemon.id().to_string()),
+        ("harness", "claude bg".into()),
+        ("state", "working".into()),
+    ] {
+        assert!(
+            details.lines().any(|l| l
+                .split('│')
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2 + value.matches(' ').count())
+                .any(|w| w[0] == key && w[1..].join(" ") == value)),
+            "{key} {value} is not under the row:\n{screen}"
+        );
+    }
+    for key in [
+        "model",
+        "effort",
+        "context",
+        "tokens",
+        "cost",
+        "folder",
+        "branch",
+        "bypass",
+        "plan",
+        "cpu",
+        "memory",
+        "children",
+        "tasks",
+        "activity",
+        "started",
+        "transcript",
+        "last reply",
+    ] {
+        assert!(
+            details.lines().any(|l| l
+                .split_whitespace()
+                .any(|w| w == key.split(' ').next().unwrap())),
+            "{key} is not under the row:\n{screen}"
+        );
+    }
+
+    // The details are not rows: down goes straight to the next session.
+    d.press("down", DOWN);
+    let screen = d.wait_text(&format!("fixture attached to {}", rest.short));
+    assert!(selected(&screen).contains("Rest a while"), "{screen}");
+    assert!(
+        screen.contains(&fix.id),
+        "moving keeps the details open:\n{screen}"
+    );
+
+    d.press("up", UP);
+    d.wait_text(&format!("fixture attached to {}", fix.short));
+    d.press("left", b"\x1b[D");
+    let screen = d.wait_for("the details folded", |s| !s.contains(&fix.id));
+    d.capture("folded");
+    assert!(
+        row(&screen, "Fix the parser") + 1 == row(&screen, "Rest a while"),
+        "{screen}"
+    );
+    d.quit();
+    for s in [&mut fix, &mut rest] {
+        s.daemon.kill().unwrap();
+        s.daemon.wait().unwrap();
+    }
+}

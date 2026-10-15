@@ -210,6 +210,8 @@ pub enum Kind {
     /// The key is not the path, so an offer never collides with a folder row.
     Suggestion(String, String),
     NewJob,
+    /// One line of the details ← unfolds under a session row.
+    Detail,
 }
 
 impl Kind {
@@ -228,13 +230,14 @@ impl Kind {
             Self::NewFolder => "new_folder",
             Self::Suggestion(..) => "suggestion",
             Self::NewJob => "new_job",
+            Self::Detail => "detail",
         }
     }
 
     fn selectable(&self) -> bool {
         !matches!(
             self,
-            Kind::Header | Kind::Columns | Kind::Blank | Kind::HistoryStatus
+            Kind::Header | Kind::Columns | Kind::Blank | Kind::HistoryStatus | Kind::Detail
         )
     }
 
@@ -1224,7 +1227,7 @@ pub fn list(jobs_path: &Path, state: &Path, claude: &Path) -> Result<String> {
     }
     for row in data.rows(false) {
         let (key, aux) = match &row.kind {
-            Kind::Header | Kind::Columns | Kind::Blank | Kind::HistoryStatus => {
+            Kind::Header | Kind::Columns | Kind::Blank | Kind::HistoryStatus | Kind::Detail => {
                 ("hdr".to_owned(), "-".to_owned())
             }
             Kind::Job(n) => ("job".to_owned(), n.clone()),
@@ -2278,6 +2281,104 @@ fn session_cells(
             }),
     );
     row
+}
+
+/// Every column a session row can show, then what none of them does, as `key value` pairs
+/// packed into as many columns as fit. A value too long for a column gets its own line.
+fn detail_rows(s: &Session, activity: &config::Activity, width: usize) -> Vec<Row> {
+    const INDENT: &str = "    ";
+    const GAP: usize = 3;
+    const SHORT: usize = 28;
+    let spark = fleet::sparklines(std::slice::from_ref(s), activity, chrono::Utc::now())
+        .remove(&s.session_id);
+    let text = |t: String| (t, plain());
+    let mut pairs: Vec<(&str, (String, Style))> = config::COLUMNS
+        .iter()
+        .filter(|&&c| c != "last_reply")
+        .map(|&c| {
+            let value = match c {
+                "harness" => text(match &s.kind {
+                    Some(kind) => format!("{} {kind}", s.harness),
+                    None => s.harness.clone(),
+                }),
+                "folder" => text(fleet::tilde(s.dir())),
+                // ponytail: read on every rebuild for the one unfolded row; cache it if it shows.
+                "branch" => text(git_branch(s.dir()).unwrap_or_else(|| "-".into())),
+                c => cell(c, s, false, spark.as_deref()),
+            };
+            (column_label(c), value)
+        })
+        .collect();
+    let missing = || "-".to_owned();
+    pairs.extend([
+        ("id", text(s.session_id.clone())),
+        ("pid", text(s.pid.map_or_else(missing, |p| p.to_string()))),
+        ("started", text(local_stamp(s.started))),
+        (
+            "transcript",
+            text(
+                s.transcript_path
+                    .as_deref()
+                    .map_or_else(missing, fleet::tilde),
+            ),
+        ),
+        (
+            "forked from",
+            text(s.forked_from.clone().unwrap_or_else(missing)),
+        ),
+        (
+            "last reply",
+            text(
+                s.last
+                    .as_deref()
+                    .map_or_else(missing, |l| l.replace('\n', " ")),
+            ),
+        ),
+    ]);
+    let wide = |t: &str| Span::raw(t).width();
+    let key = pairs.iter().map(|(k, _)| wide(k)).max().unwrap_or(0);
+    let (short, long): (Vec<_>, Vec<_>) =
+        pairs.into_iter().partition(|(_, (v, _))| wide(v) <= SHORT);
+    let value = short.iter().map(|(_, (v, _))| wide(v)).max().unwrap_or(0);
+    let room = width.saturating_sub(INDENT.len());
+    let per = ((room + GAP) / (key + 1 + value + GAP)).max(1);
+    let pair = |k: &str, (v, style): (String, Style), pad: usize| {
+        let style = if v == "-" { dim() } else { style };
+        [
+            (format!("{k}{} ", " ".repeat(key - wide(k))), dim()),
+            (
+                format!("{v}{}", " ".repeat(pad.saturating_sub(wide(&v)))),
+                style,
+            ),
+        ]
+    };
+    let mut rows: Vec<Row> = short
+        .chunks(per)
+        .map(|line| {
+            let mut cells = vec![(INDENT.to_owned(), plain())];
+            for (n, (k, v)) in line.iter().cloned().enumerate() {
+                let pad = if n + 1 < line.len() { value + GAP } else { 0 };
+                cells.extend(pair(k, v, pad));
+            }
+            Row {
+                kind: Kind::Detail,
+                cells,
+            }
+        })
+        .collect();
+    rows.extend(long.into_iter().map(|(k, (v, style))| {
+        let mut cells = vec![(INDENT.to_owned(), plain())];
+        cells.extend(pair(
+            k,
+            (clip(&v, room.saturating_sub(key + 1).max(1)), style),
+            0,
+        ));
+        Row {
+            kind: Kind::Detail,
+            cells,
+        }
+    }));
+    rows
 }
 
 fn cell(column: &str, s: &Session, _by_state: bool, spark: Option<&str>) -> (String, Style) {
@@ -9028,6 +9129,8 @@ struct App {
     highlighted: HashSet<String>,
     /// Session ids pinned with ctrl+t, listed above every group; kept in `state/pins.json`.
     pinned: HashSet<String>,
+    /// The session whose details ← unfolded under its row.
+    unfolded: Option<String>,
     /// Every folder a session has been listed in, kept in `state/open-folders.json` until
     /// `ctrl+x` closes it or the directory is gone.
     open_folders: BTreeSet<PathBuf>,
@@ -9444,6 +9547,7 @@ impl App {
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .unwrap_or_default(),
             open_folders: open,
+            unfolded: None,
             armed: None,
             create_folder: None,
             armed_at: Instant::now(),
@@ -11591,6 +11695,7 @@ impl App {
         } else {
             self.rows.extend(history);
         }
+        self.unfold();
         self.apply_filter();
         if let Some(k) = &keep
             && let Some(i) = self
@@ -11610,6 +11715,27 @@ impl App {
         self.settle();
         self.timing("rebuild", started);
         self.report_rows(reason);
+    }
+
+    /// Put the unfolded session's details under its row.
+    fn unfold(&mut self) {
+        let Some(id) = self.unfolded.as_deref() else {
+            return;
+        };
+        let (Some(at), Some(s)) = (
+            self.rows
+                .iter()
+                .position(|r| matches!(&r.kind, Kind::Session(k, _) if k == id)),
+            self.data.sessions.iter().find(|s| s.session_id == id),
+        ) else {
+            return;
+        };
+        let width = match self.list_area.width {
+            0 => 80,
+            w => usize::from(w),
+        };
+        let details = detail_rows(s, &self.data.spark, width);
+        self.rows.splice(at + 1..at + 1, details);
     }
 
     fn filter_changed(&mut self) {
@@ -11672,6 +11798,12 @@ impl App {
             .filter(|&(n, &i)| {
                 rows[i].kind.selectable()
                     || rows[i].kind == Kind::HistoryStatus
+                    // Details follow their session in or out.
+                    || (rows[i].kind == Kind::Detail
+                        && (0..i)
+                            .rev()
+                            .find(|&j| rows[j].kind != Kind::Detail)
+                            .is_some_and(|j| matched.binary_search(&j).is_ok()))
                     // The blank that pads a history result from the one above it.
                     || (rows[i].kind == Kind::Blank
                         && matched
@@ -16178,6 +16310,16 @@ impl App {
                 {
                     self.leave_jobs();
                     self.needs_clear = true;
+                    return Ok(false);
+                }
+                // ← unfolds every detail of a session under its row, and folds it again.
+                if action == KeyAction::Left
+                    && mods.is_empty()
+                    && self.composer_text().is_empty()
+                    && let Some(Kind::Session(id, _)) = self.selected().map(|r| r.kind.clone())
+                {
+                    self.unfolded = (self.unfolded.as_ref() != Some(&id)).then_some(id);
+                    self.rebuild();
                     return Ok(false);
                 }
                 if searching_history {

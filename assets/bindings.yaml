@@ -17,6 +17,8 @@ states:
           description: Rename a session; submit empty for native naming.
         - action: fork
           description: Fork the selected conversation.
+        - action: left
+          description: Show all of a session's details.
         - action: pin
           description: Pin a session above every group, or unpin it.
         - action: highlight
@@ -57,7 +59,7 @@ states:
         description: "Complete a path being typed, otherwise focus the pane or leave the jobs screen."
       - keys: ["left"]
         action: left
-        description: "Leave jobs when the composer is empty."
+        description: "With an empty composer, leave jobs, or unfold every detail of the selected session under its row and fold it again."
       - keys: ["right"]
         action: right
         description: "With an empty composer, focus the pane or enter a session."
