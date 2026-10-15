@@ -64,6 +64,9 @@ pub struct Screen {
     mouse_protocol_encoding: MouseProtocolEncoding,
 }
 
+/// Longest target kept, as other terminals cap OSC 8 URIs.
+const LINK_MAX: usize = 2083;
+
 impl Screen {
     pub(crate) fn new(
         size: crate::grid::Size,
@@ -82,6 +85,24 @@ impl Screen {
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
         }
+    }
+
+    /// Returns the target of OSC 8 link `id`, as a cell's [`crate::Cell::link`] gives it.
+    #[must_use]
+    pub fn link(&self, id: u16) -> Option<std::sync::Arc<str>> {
+        crate::attrs::link_target(id)
+    }
+
+    /// OSC 8: text written from here on belongs to `uri`, or to no link when it is empty.
+    /// Only printable ASCII is kept as a target, since the renderer writes it back out to a
+    /// terminal; anything else, or a target past [`LINK_MAX`], ends the current link.
+    pub(crate) fn set_link(&mut self, uri: &[u8]) {
+        let printable = uri.iter().all(|b| (0x21..0x7f).contains(b));
+        self.attrs.link = if uri.is_empty() || !printable || uri.len() > LINK_MAX {
+            0
+        } else {
+            crate::attrs::intern_link(std::str::from_utf8(uri).unwrap_or_default())
+        };
     }
 
     /// Resizes the terminal.
@@ -1232,8 +1253,12 @@ impl Screen {
         // XXX really i want to just be able to pass in a default Params
         // instance with a 0 in it, but vte doesn't allow creating new Params
         // instances
+        let reset = crate::attrs::Attrs {
+            link: self.attrs.link,
+            ..Default::default()
+        };
         if params.is_empty() {
-            self.attrs = crate::attrs::Attrs::default();
+            self.attrs = reset;
             return;
         }
 
@@ -1270,7 +1295,7 @@ impl Screen {
 
         loop {
             match next_param!() {
-                [0] => self.attrs = crate::attrs::Attrs::default(),
+                [0] => self.attrs = reset,
                 [1] => self.attrs.set_bold(),
                 [2] => self.attrs.set_dim(),
                 [3] => self.attrs.set_italic(true),

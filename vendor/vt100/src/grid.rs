@@ -219,6 +219,8 @@ impl Grid {
         contents: &mut Vec<u8>,
     ) -> crate::attrs::Attrs {
         crate::term::ClearAttrs.write_buf(contents);
+        // Close any open OSC 8 link, which SGR 0 leaves alone.
+        contents.extend_from_slice(b"\x1b]8;;\x1b\\");
         crate::term::ClearScreen.write_buf(contents);
 
         let mut prev_attrs = crate::attrs::Attrs::default();

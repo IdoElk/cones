@@ -9,7 +9,10 @@
 //! for the list; each release saves the share as `pane.ratio` in jobs.yaml, and a restarted
 //! dashboard draws the divider where the last drag left it. A wheel report split across two
 //! reads, its Esc alone and then its text, never reaches the shell or the list's new-agent
-//! input, while a typed Esc still reaches the shell. No harness or model is started.
+//! input, while a typed Esc still reaches the shell. An OSC 8 link printed in the pane
+//! reaches the outer terminal on the linked text only, through an SGR reset inside it and
+//! with a separator in its target, while a target holding a space is dropped. No harness or
+//! model is started.
 use crate::dashboard::*;
 use std::fs;
 
@@ -192,5 +195,30 @@ fn a_split_wheel_report_never_reaches_the_list_input() {
     d.wait_file("state/tui-debug.log", |s| {
         s.contains("input.split_mouse_report")
     });
+    d.quit();
+}
+
+#[test]
+fn an_osc8_link_in_the_pane_reaches_the_terminal() {
+    let mut d = Dashboard::new("pane-osc8-link", &[]);
+    fs::write(d.home().join(".zshrc"), format!("PROMPT='{PROMPT} '\n")).unwrap();
+    d.start();
+    d.press("enter", ENTER);
+    d.wait_for("a shell in the pane", |s| s.contains(PROMPT));
+    d.typed(concat!(
+        r"printf '\e]8;;https://example.com/a;b\e\\link\e[0med\e]8;;\e\\ plain ",
+        // The escaped c keeps the echoed command from matching the printed word.
+        r"\e]8;;https://x y\e\\spa\x63ed\e]8;;\e\\\n'",
+        "\r"
+    ));
+    let screen = d.wait_for("the printed link", |s| s.contains("linked plain spaced"));
+    d.capture("linked");
+    let url = Some("https://example.com/a;b".to_owned());
+    assert_eq!(d.link_of("linked plain"), url, "{screen}");
+    assert_eq!(d.link_of("ed plain"), url, "after the SGR reset:\n{screen}");
+    assert_eq!(d.link_of(" plain spaced"), None, "{screen}");
+    assert_eq!(d.link_of("spaced"), None, "{screen}");
+    d.press("ctrl+z", CTRL_Z);
+    d.wait_for("the list", |s| s.contains("tab pane"));
     d.quit();
 }

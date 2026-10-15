@@ -6,7 +6,7 @@
 //! alternate screens add no history. Unscrolled cell access also lets dashboard
 //! layout inspect the live input box without moving the user's history view.
 use ratatui::{
-    buffer::Buffer,
+    buffer::{Buffer, CellDiffOption},
     crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -14,6 +14,7 @@ use ratatui::{
 use std::{
     fs::File,
     io::{self, Read, Write},
+    num::NonZeroU16,
     os::{
         fd::{AsRawFd, FromRawFd, IntoRawFd},
         unix::process::{CommandExt, ExitStatusExt},
@@ -947,7 +948,10 @@ fn color(c: vt100::Color) -> Color {
     }
 }
 
-/// Render clipped cells; the caller draws the real terminal cursor.
+/// Render clipped cells; the caller draws the real terminal cursor. A narrow cell inside an
+/// OSC 8 link carries the link's escapes around its text, with its width forced to one so
+/// ratatui does not count the target, and the terminal around cones opens it on its own
+/// link click. Wide cells are drawn without their link.
 pub fn render(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
     let (rows, cols) = screen.size();
     for row in 0..rows.min(area.height) {
@@ -973,8 +977,18 @@ pub fn render(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
                 }
             }
             target.set_style(style);
+            target.set_diff_option(CellDiffOption::None);
             if cell.is_wide_continuation() {
                 target.set_symbol("");
+            } else if let Some(url) = (cell.has_contents() && !cell.is_wide())
+                .then(|| screen.link(cell.link()))
+                .flatten()
+            {
+                target.set_symbol(&format!(
+                    "\x1b]8;;{url}\x1b\\{}\x1b]8;;\x1b\\",
+                    cell.contents()
+                ));
+                target.set_diff_option(CellDiffOption::ForcedWidth(NonZeroU16::MIN));
             } else if cell.has_contents() {
                 target.set_symbol(cell.contents());
             } else {

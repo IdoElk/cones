@@ -219,6 +219,13 @@ impl Dashboard {
         self.cell_of(text).map(|c| c.fgcolor())
     }
 
+    /// The OSC 8 target of the first cell of the first `text` on the screen.
+    pub fn link_of(&self, text: &str) -> Option<String> {
+        let cell = self.cell_of(text)?;
+        let parser = self.screen.lock().unwrap();
+        parser.screen().link(cell.link()).map(|url| url.to_string())
+    }
+
     /// The first cell of the first `text` on the screen.
     pub fn cell_of(&self, text: &str) -> Option<vt100::Cell> {
         let parser = self.screen.lock().unwrap();

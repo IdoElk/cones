@@ -29,6 +29,7 @@ a separate setting.
 | `shift+enter` | Open the selection fullscreen once; insert a line break with text. Alt+Enter is also accepted. |
 | `tab` | Complete a directory path in the composer; otherwise enter the pane. Native viewer behavior is below. |
 | `→` | With an empty composer, enter the pane or open the session fullscreen if the pane is off. |
+| `←` | With an empty composer on a session, unfold every [column value](jobs.md#list-settings) and its id, pid, start time, transcript and fork parent under the row; again folds them. The details stay while you move to other rows. |
 | `ctrl+z` | Return from a viewer or screen to the list. |
 | `ctrl+\` | Toggle the pane; in a focused screen, switch split/fullscreen. Also `ctrl+4`. |
 | `esc` | Cancel the current action or draft, then back out; with nothing left, a second press within 1.5 seconds quits. Native viewers receive Escape. |
@@ -334,7 +335,9 @@ copies it on release, kept inside the region where the press landed. A left drag
 divider between list and pane moves it instead; a short heavy grip follows the pointer
 along the divider, the whole divider lights up while dragged, the pane keeps 30 to 70 percent of the frame, its viewer is resized as for a terminal resize,
 and the release saves the share as [`pane.ratio`](jobs.md#pane). `alt+m` hands the
-mouse to the terminal, for a selection that crosses regions, and takes it back. See
+mouse to the terminal, for a selection that crosses regions, and takes it back. A link a
+client prints with OSC 8, as Claude Code does for URLs and files, reaches the terminal
+around cones, which opens it on its own link click, such as cmd+click. See
 [diagnostics](cli.md#diagnostics) for delays.
 
 ## Composer

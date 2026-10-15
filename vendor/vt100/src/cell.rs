@@ -1,7 +1,7 @@
 use unicode_width::UnicodeWidthChar as _;
 
-// chosen to make the size of the cell struct 32 bytes
-const CONTENT_BYTES: usize = 22;
+// chosen to make the size of the cell struct 32 bytes, with the link id in attrs
+const CONTENT_BYTES: usize = 19;
 
 const IS_WIDE: u8 = 0b1000_0000;
 const IS_WIDE_CONTINUATION: u8 = 0b0100_0000;
@@ -75,7 +75,8 @@ impl Cell {
 
     pub(crate) fn clear(&mut self, attrs: crate::attrs::Attrs) {
         self.len = 0;
-        self.attrs = attrs;
+        // Erased cells take the background but belong to no link.
+        self.attrs = crate::attrs::Attrs { link: 0, ..attrs };
     }
 
     /// Returns the text contents of the cell.
@@ -175,5 +176,12 @@ impl Cell {
     #[must_use]
     pub fn inverse(&self) -> bool {
         self.attrs.inverse()
+    }
+
+    /// Returns the cell's OSC 8 link id, 0 for none; [`crate::Screen::link`]
+    /// resolves it.
+    #[must_use]
+    pub fn link(&self) -> u16 {
+        self.attrs.link
     }
 }
