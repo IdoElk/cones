@@ -1797,11 +1797,12 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
             "{key} is not under the row:\n{screen}"
         );
     }
-    // Each group names itself once, ahead of its first short value; long values follow.
+    // Each group names itself once, ahead of its first short value; values too wide to share
+    // a line, here the start time, follow on their own.
     for (group, first) in [
         ("agent", "harness"),
         ("usage", "tokens"),
-        ("time", "started"),
+        ("time", "age"),
         ("process", "pid"),
         ("source", "forked"),
         ("reply", "last"),
@@ -1815,6 +1816,13 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
             "no {group} group led by {first}:\n{details}"
         );
     }
+    // The start time takes its own line so the rest pack three to a line.
+    assert!(
+        details
+            .lines()
+            .any(|l| l.contains("harness") && l.contains(" state ") && l.contains(" model ")),
+        "the list's room packs three details to a line:\n{details}"
+    );
     // The second column starts at the same place in every group.
     let starts: Vec<_> = [("harness", "state"), ("tokens", "context"), ("pid", "cpu")]
         .map(|(first, second)| {

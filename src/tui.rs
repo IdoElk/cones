@@ -2387,19 +2387,37 @@ fn detail_rows(s: &Session, activity: &config::Activity, width: usize) -> Vec<Ro
             *v = v.trim().to_owned();
         }
     }
-    // One value width for every group, so the columns line up across the whole panel.
-    let value = grouped
+    // One value width for every group, so the columns line up across the whole panel. It is
+    // the width that prints the fewest lines: values wider than it take a line of their own,
+    // so a narrow list moves a path or a graph aside instead of going one value per line.
+    let widths: Vec<Vec<usize>> = grouped
         .iter()
-        .flat_map(|(_, m)| m.iter().map(|(_, (v, _))| wide(v)))
+        .map(|(_, m)| m.iter().map(|(_, (v, _))| wide(v)).collect())
+        .collect();
+    let per_at = |value: usize| ((room + GAP) / (key + 1 + value + GAP)).max(1);
+    let lines_at = |value: usize| -> usize {
+        let per = per_at(value);
+        widths
+            .iter()
+            .map(|g| {
+                let short = g.iter().filter(|&&w| w <= value).count();
+                short.div_ceil(per) + g.len() - short
+            })
+            .sum()
+    };
+    let value = widths
+        .iter()
+        .flatten()
+        .copied()
         .filter(|&w| w <= SHORT)
-        .max()
+        .min_by_key(|&w| (lines_at(w), std::cmp::Reverse(w)))
         .unwrap_or(0);
-    let per = ((room + GAP) / (key + 1 + value + GAP)).max(1);
+    let per = per_at(value);
     let mut rows = Vec::new();
     for (group, members) in grouped {
         let (short, long): (Vec<_>, Vec<_>) = members
             .into_iter()
-            .partition(|(_, (v, _))| wide(v) <= SHORT);
+            .partition(|(_, (v, _))| wide(v) <= value);
         let lines = short
             .chunks(per)
             .map(|line| {
