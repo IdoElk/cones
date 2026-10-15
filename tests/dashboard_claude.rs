@@ -1736,6 +1736,9 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
     let project = real_project(&d);
     let mut fix = seed(&d, &project, 1, "Fix the parser", "busy", None);
     let mut rest = seed(&d, &project, 2, "Rest a while", "idle", None);
+    // A narrow pane leaves the list room for several detail columns.
+    let yaml = fs::read_to_string(d.path("jobs.yaml")).unwrap();
+    fs::write(d.path("jobs.yaml"), format!("{yaml}pane:\n  ratio: 30\n")).unwrap();
     d.start();
     let screen = d.wait_text(&format!("fixture attached to {}", fix.short));
     assert!(selected(&screen).contains("Fix the parser"), "{screen}");
@@ -1812,6 +1815,22 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
             "no {group} group led by {first}:\n{details}"
         );
     }
+    // The second column starts at the same place in every group.
+    let starts: Vec<_> = [("harness", "state"), ("tokens", "context"), ("pid", "cpu")]
+        .map(|(first, second)| {
+            let line = details
+                .lines()
+                .find(|l| l.contains(first))
+                .unwrap_or_else(|| panic!("no {first} line:\n{details}"));
+            line.find(&format!(" {second} "))
+                .map(|i| line[..i].chars().count())
+                .unwrap_or_else(|| panic!("{second} does not follow {first}:\n{details}"))
+        })
+        .to_vec();
+    assert!(
+        starts.windows(2).all(|w| w[0] == w[1]),
+        "detail columns do not line up ({starts:?}):\n{details}"
+    );
     let style = |text: &str| {
         let c = d.cell_of(text).unwrap();
         (c.bold(), c.dim())

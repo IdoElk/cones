@@ -2381,14 +2381,25 @@ fn detail_rows(s: &Session, activity: &config::Activity, width: usize) -> Vec<Ro
     }
     // ponytail: a column added to config::COLUMNS shows under agent until GROUPS names it.
     grouped[0].1.extend(pairs);
+    // Cells arrive padded for the list's right-aligned columns; details align on the left.
+    for (_, members) in &mut grouped {
+        for (_, (v, _)) in members.iter_mut() {
+            *v = v.trim().to_owned();
+        }
+    }
+    // One value width for every group, so the columns line up across the whole panel.
+    let value = grouped
+        .iter()
+        .flat_map(|(_, m)| m.iter().map(|(_, (v, _))| wide(v)))
+        .filter(|&w| w <= SHORT)
+        .max()
+        .unwrap_or(0);
+    let per = ((room + GAP) / (key + 1 + value + GAP)).max(1);
     let mut rows = Vec::new();
     for (group, members) in grouped {
         let (short, long): (Vec<_>, Vec<_>) = members
             .into_iter()
             .partition(|(_, (v, _))| wide(v) <= SHORT);
-        // Value columns fit their own group, so one wide sparkline does not unpack the rest.
-        let value = short.iter().map(|(_, (v, _))| wide(v)).max().unwrap_or(0);
-        let per = ((room + GAP) / (key + 1 + value + GAP)).max(1);
         let lines = short
             .chunks(per)
             .map(|line| {
