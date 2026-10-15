@@ -7115,16 +7115,14 @@ impl ConfigForm {
         }
         match ev.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                for _ in 0..WHEEL_LINES {
-                    self.key(
-                        if ev.kind == MouseEventKind::ScrollUp {
-                            KeyCode::Up
-                        } else {
-                            KeyCode::Down
-                        },
-                        KeyModifiers::NONE,
-                    );
-                }
+                self.key(
+                    if ev.kind == MouseEventKind::ScrollUp {
+                        KeyCode::Up
+                    } else {
+                        KeyCode::Down
+                    },
+                    KeyModifiers::NONE,
+                );
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let x = ev.column.saturating_sub(self.area.x);
@@ -7708,13 +7706,11 @@ impl ColumnsPicker {
     fn mouse(&mut self, ev: MouseEvent) -> ColumnAction {
         match ev.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                for _ in 0..WHEEL_LINES {
-                    self.key(if ev.kind == MouseEventKind::ScrollUp {
-                        KeyCode::Up
-                    } else {
-                        KeyCode::Down
-                    });
-                }
+                self.key(if ev.kind == MouseEventKind::ScrollUp {
+                    KeyCode::Up
+                } else {
+                    KeyCode::Down
+                });
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let x = ev.column.saturating_sub(self.area.x);
@@ -13686,9 +13682,8 @@ impl App {
                 } else {
                     -1
                 };
-                for _ in 0..WHEEL_LINES {
-                    self.step(delta);
-                }
+                // One row per wheel report: a list moves by selection, not by lines.
+                self.step(delta);
                 return;
             }
             if ev.kind == MouseEventKind::Down(MouseButton::Left) {

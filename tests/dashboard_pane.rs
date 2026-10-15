@@ -11,7 +11,8 @@
 //! reads, its Esc alone and then its text, never reaches the shell or the list's new-agent
 //! input, while a typed Esc still reaches the shell. An OSC 8 link printed in the pane
 //! reaches the outer terminal on the linked text only, through an SGR reset inside it and
-//! with a separator in its target, while a target holding a space is dropped. No harness or
+//! with a separator in its target, while a target holding a space is dropped. One wheel report
+//! over the list moves its selection one row, as far as one down arrow. No harness or
 //! model is started.
 use crate::dashboard::*;
 use std::fs;
@@ -220,5 +221,34 @@ fn an_osc8_link_in_the_pane_reaches_the_terminal() {
     assert_eq!(d.link_of("spaced"), None, "{screen}");
     d.press("ctrl+z", CTRL_Z);
     d.wait_for("the list", |s| s.contains("tab pane"));
+    d.quit();
+}
+
+#[test]
+fn one_wheel_report_over_the_list_moves_the_selection_one_row() {
+    let mut d = Dashboard::new("list-wheel-one-row", &[]);
+    let dirs: Vec<_> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|rel| {
+            fs::create_dir_all(d.path(rel)).unwrap();
+            d.path(rel).canonicalize().unwrap()
+        })
+        .collect();
+    d.open_folders(&dirs);
+    d.start();
+    // Every folder's row reads the same, so the selection is its screen line.
+    let selected = |s: &str| s.lines().position(|l| l.starts_with('▌'));
+    let first = selected(&d.wait_for("a selected folder", |s| selected(s).is_some()));
+    d.press("wheel down", &mouse(65, 5, 12, false));
+    let wheeled = selected(&d.wait_for("the selection moved", |s| selected(s) != first));
+    d.capture("wheeled");
+    d.press("up", b"\x1b[A");
+    d.wait_for("the first row again", |s| selected(s) == first);
+    d.press("down", b"\x1b[B");
+    let stepped = selected(&d.wait_for("the selection moved", |s| selected(s) != first));
+    assert_eq!(
+        wheeled, stepped,
+        "one wheel report moves as far as one down arrow"
+    );
     d.quit();
 }

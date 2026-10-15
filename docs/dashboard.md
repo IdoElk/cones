@@ -329,7 +329,7 @@ returns to its list and closes that client.
 Clicks in scrolled emulator history stay with the emulator. Typing returns to the live
 screen.
 
-Cones reads the mouse on every screen. The wheel moves through the list and scrolls the
+Cones reads the mouse on every screen. The wheel moves through the list one row per report and scrolls the
 pane, preview, Help or editor under the pointer. A left drag selects text in any of them and
 copies it on release, kept inside the region where the press landed. A left drag on the
 divider between list and pane moves it instead; a short heavy grip follows the pointer
