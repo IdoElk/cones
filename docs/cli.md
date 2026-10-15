@@ -34,6 +34,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones show ID [--tail N] [--all] [--json]` | [Read a session's conversation](#reading-a-conversation). |
 | `cones mcp` | Serve [history tools over MCP stdio](#history-over-mcp). |
 | `cones stop ID` | [Stop a session](#stopping-a-session) and keep its conversation. |
+| `cones rm ID`, `cones rm --job NAME` | [Remove a row](#removing-a-row) the way the dashboard's confirmed `ctrl+x` does. |
 | `cones comms [--dir PATH] send\|mail\|wait ...` | [Write to the agents in a folder, read their replies and wait for one](#comms). |
 | `cones config [--check]` | Print the `jobs.yaml` path, editing notes and the full [configuration reference](jobs.md), for you or an agent to edit the file directly. `--check` validates the file. |
 | `cones config set KEY VALUE`, `cones config unset KEY` | Set one [setting](jobs.md) by dotted path, such as `columns`, `highlight` or `defaults.model`, or remove it to restore the built-in. VALUE is YAML, so a list is `'[state, bypass, model]'`. Only that top-level block is rewritten; a value the file would refuse leaves it unchanged. Jobs are not settable here. |
@@ -252,6 +253,21 @@ Use the id from `cones ls --json`. Four targets are supported:
 Ambiguous or unknown ids, unrelated external terminals and unsupported harness operations fail.
 See [detached launch](harness.md#detached-launch) for what a Codex stop leaves in place.
 The dashboard has separate [stop/removal controls](harness.md#native-actions).
+
+### Removing a row
+
+`cones rm` does what a second `ctrl+x` does to a row with nothing left to stop. The id or
+unambiguous prefix comes from `cones ls`.
+
+| Target | Operation |
+| --- | --- |
+| Finished run | Hidden from the dashboard; output and ledger record remain, and `cones ls` still prints it. |
+| Claude background | Native `claude rm`, as the [dashboard](harness.md#native-actions) runs it; the transcript remains. |
+| Codex daemon thread | Forgotten and hidden, its client closed; the thread stays resumable from history. |
+| `--job NAME` | Deleted from `jobs.yaml`, the rest of the file as written, then schedules reinstalled. |
+
+A running run or job and a session that only a signal ends are refused with the `cones stop`
+that ends them. Closing an empty dashboard folder has no command.
 
 ## Coordinator
 

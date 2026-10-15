@@ -43,7 +43,8 @@ turn.
 the output; `cones ls --json` prints one object per line, with a live session's fields under
 `.session`. IDs come from `cones ls` or `cones launch`; a prefix of four or more characters
 works, and an ambiguous one is an error rather than a guess. `cones stop ID` ends a session's
-work and keeps its conversation.
+work and keeps its conversation; `cones rm ID` then clears its row the way the dashboard's
+`ctrl+x` does.
 
 ## Ground rules
 

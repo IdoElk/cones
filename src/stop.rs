@@ -176,3 +176,58 @@ fn process(pid: u32) -> (String, String) {
     let mut next = || words.next().unwrap_or("").to_owned();
     (next(), next())
 }
+
+/// `cones rm ID`: what the dashboard's confirmed `ctrl+x` does to a row with nothing left to
+/// stop. A finished run is hidden, a removable session loses its native record, a Codex thread is
+/// forgotten. Its conversation and output stay. Work still running is refused, so a removal never
+/// stands in for a stop.
+pub fn remove(
+    state: &Path,
+    claude: &Path,
+    rows: &[crate::fleet::Session],
+    id: &str,
+) -> Result<String> {
+    let ledger = crate::ledger::Ledger::new(state)?;
+    if let Ok(run) = ledger.resolve(id) {
+        ensure!(
+            run.status() != "started",
+            "run {id} is still running; `cones stop {id}` ends it first"
+        );
+        ledger.hide(&run.started.run_id)?;
+        return Ok(format!(
+            "hid run {} from the dashboard; its output and ledger record are kept\n",
+            run.started.run_id
+        ));
+    }
+    let session = rows
+        .iter()
+        .find(|s| s.session_id == id)
+        .with_context(|| format!("no run or session {id}"))?;
+    let spec = harness::by_name(&session.harness).context("unknown session harness")?;
+    match spec.session(session.kind.as_deref()).stop {
+        harness::spec::Stop::Remove => {
+            crate::fleet::stop(claude, id)?;
+            Ok(format!(
+                "removed {} session {id}; its transcript is kept\n",
+                spec.name
+            ))
+        }
+        harness::spec::Stop::ForgetClient => {
+            crate::codex::forget(state, id)?;
+            // The daemon holds the thread for minutes after its client goes, so the saved record
+            // alone would bring the row back.
+            ledger.hide(id)?;
+            if let Some(pid) = session.pid {
+                crate::fleet::terminate(pid, &spec.name)?;
+            }
+            Ok(format!(
+                "forgot {} thread {id}; it stays resumable from history\n",
+                spec.name
+            ))
+        }
+        harness::spec::Stop::Signal => bail!(
+            "{} session {id} has no record to remove; `cones stop {id}` ends it",
+            spec.name
+        ),
+    }
+}

@@ -13,10 +13,18 @@ use std::{
 
 /// Answers `stop` the way the installed CLI does — idempotently — and records the id and native
 /// home it was given. Every other subcommand fails, so a stop that reached for `rm` cannot pass
-/// quietly. A `refuse` marker in the home turns the next stop into a native failure.
+/// quietly; an `allow-rm` marker in the home lets `cones rm` reach it. A `refuse` marker in the
+/// home turns the next stop into a native failure.
 const FAKE: &str = r#"#!/bin/sh
 if [ "$1" = stop ] && [ "$2" = --help ]; then
     echo "Usage: claude stop <id>"
+    exit 0
+fi
+# The default home is the one `claude rm` gets with no override, as the installed CLI reads it.
+if [ "$1" = rm ] && [ -e "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/allow-rm" ]; then
+    home=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+    printf '%s\n' "$* $home" >> "$home/calls.log"
+    echo "removed $2"
     exit 0
 fi
 home=${CLAUDE_CONFIG_DIR:?a stop must name the native home of its session}
@@ -89,6 +97,17 @@ impl Fixture {
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("CODEX_HOME")
             .args(["--state-dir", self.state().to_str().unwrap(), "stop", id])
+            .output()
+            .unwrap()
+    }
+
+    fn cones(&self, args: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_cones"))
+            .env("HOME", self.root.path())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .args(["--state-dir", self.state().to_str().unwrap()])
+            .args(args)
             .output()
             .unwrap()
     }
@@ -946,4 +965,169 @@ fn ready(host: &mut Host) -> serde_json::Value {
     let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(reply.get("Ok").is_some(), "{reply}");
     reply
+}
+
+/// `cones rm` on a settled background session is the dashboard's confirmed `ctrl+x`: the native
+/// `claude rm` in the session's home, by prefix, with the transcript left and nothing signalled.
+#[test]
+fn rm_removes_a_background_session_record_and_keeps_its_transcript() {
+    let f = Fixture::new();
+    fs::write(f.home().join("allow-rm"), "").unwrap();
+    let id = "dddddddd-4444-4444-8444-444444444444";
+    let idle = Idle::new();
+    f.live(id, "bg", idle.0.id());
+    let transcript = f.transcript(id);
+
+    let out = f.cones(&["rm", "dddddddd"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("removed claude session {id}; its transcript is kept\n")
+    );
+    assert_eq!(
+        f.calls().trim(),
+        format!("rm dddddddd {}", f.home().display())
+    );
+    assert!(
+        transcript.exists(),
+        "a removal must leave the conversation resumable"
+    );
+    assert!(
+        idle.alive(),
+        "a removal must not signal the process behind the session"
+    );
+}
+
+/// Removal never stands in for a stop: an interactive session and a running run are refused with
+/// the stop that ends them, and reach no harness. A finished run is hidden and leaves the ledger.
+#[test]
+fn rm_hides_a_finished_run_and_refuses_what_only_a_stop_ends() {
+    use cones::ledger::{Ledger, Record, Status};
+    let f = Fixture::new();
+    fs::write(f.home().join("allow-rm"), "").unwrap();
+    let id = "eeeeeeee-5555-4555-8555-555555555555";
+    let idle = Idle::new();
+    f.live(id, "interactive", idle.0.id());
+    let out = f.cones(&["rm", id]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains(&format!(
+            "has no record to remove; `cones stop {id}` ends it"
+        )),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(f.calls(), "");
+    assert!(idle.alive());
+
+    let ledger = Ledger::new(&f.state()).unwrap();
+    let (running, finished) = ("run-running-0001", "run-finished-0002");
+    for (run, done) in [(running, false), (finished, true)] {
+        let mut started = Record::new(run.into(), Status::Started);
+        started.job = Some("nightly".into());
+        ledger.append(&started).unwrap();
+        if done {
+            ledger.append(&Record::new(run.into(), Status::Ok)).unwrap();
+        }
+    }
+    let out = f.cones(&["rm", running]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains(&format!(
+            "run {running} is still running; `cones stop {running}`"
+        )),
+        "{}",
+        text(&out.stderr)
+    );
+
+    let out = f.cones(&["rm", finished]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("hid run {finished} from the dashboard; its output and ledger record are kept\n")
+    );
+    assert_eq!(
+        ledger.hidden().unwrap().into_iter().collect::<Vec<_>>(),
+        vec![finished.to_owned()]
+    );
+    assert_eq!(
+        ledger.runs().unwrap().len(),
+        2,
+        "the ledger keeps the hidden run"
+    );
+    assert_eq!(f.calls(), "");
+}
+
+/// `cones rm --job` deletes that block and leaves the rest of the file as written, then
+/// reinstalls the schedules. A file at `$HOME/Library` stops the install before any `launchctl`
+/// call reaches the machine's real domain, so the failure is reported after the delete. A job
+/// with a running run is refused with the stop that ends it.
+#[test]
+fn rm_job_deletes_its_block_and_refuses_a_running_one() {
+    use cones::ledger::{Ledger, Record, Status};
+    let f = Fixture::new();
+    fs::write(f.root.path().join("Library"), "no LaunchAgents here\n").unwrap();
+    let jobs = f.root.path().join("jobs.yaml");
+    let kept = "  # kept as written\n  - name: keep\n    schedule: '0 3 * * *'\n    cwd: /tmp\n    prompt: keep\n";
+    let gone = "  - name: gone\n    schedule: '0 4 * * *'\n    cwd: /tmp\n    prompt: gone\n";
+    fs::write(&jobs, format!("version: 4\njobs:\n{kept}{gone}")).unwrap();
+    let jobs_arg = jobs.to_str().unwrap();
+
+    let mut started = Record::new("run-gone-0001".into(), Status::Started);
+    started.job = Some("gone".into());
+    let ledger = Ledger::new(&f.state()).unwrap();
+    ledger.append(&started).unwrap();
+    let out = f.cones(&["--jobs", jobs_arg, "rm", "--job", "gone"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr)
+            .contains("job gone is running as run-gone-0001; `cones stop run-gone-0001`"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&jobs).unwrap(),
+        format!("version: 4\njobs:\n{kept}{gone}")
+    );
+
+    ledger
+        .append(&Record::new("run-gone-0001".into(), Status::Ok))
+        .unwrap();
+    let out = f.cones(&["--jobs", jobs_arg, "rm", "--job", "gone"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("job gone deleted, but reinstalling the schedules failed"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&jobs).unwrap(),
+        format!("version: 4\njobs:\n{kept}")
+    );
+}
+
+/// `cones rm` on a saved Codex thread forgets it the way the dashboard does: the saved record goes
+/// and the row is hidden, so the daemon's lingering hold cannot bring it back. The rollout stays.
+#[test]
+fn rm_forgets_a_codex_thread_and_keeps_its_rollout() {
+    let f = Fixture::new();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec06070";
+    let rollout = codex_thread(&f, id);
+
+    let out = f.cones(&["rm", id]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("forgot codex thread {id}; it stays resumable from history\n")
+    );
+    let saved = fs::read_to_string(f.state().join("codex-threads.json")).unwrap();
+    assert!(!saved.contains(id), "{saved}");
+    assert_eq!(
+        fs::read_to_string(f.state().join("hidden")).unwrap(),
+        format!("{id}\n")
+    );
+    assert!(
+        rollout.exists(),
+        "a removal must leave the conversation resumable"
+    );
 }

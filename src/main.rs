@@ -169,6 +169,16 @@ enum Action {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
         id: String,
     },
+    /// Remove what the dashboard's ctrl+x removes: a finished run, a session record, a Codex
+    /// thread or a job; see docs/cli.md.
+    Rm {
+        /// The run or session id as `cones ls` prints it, or an unambiguous prefix of one.
+        #[arg(required_unless_present = "job", conflicts_with = "job")]
+        id: Option<String>,
+        /// Delete this job from jobs.yaml and reinstall the schedules.
+        #[arg(long)]
+        job: Option<String>,
+    },
     /// A run's captured output; the dashboard opens this in a viewer.
     #[command(name = "__logs", hide = true)]
     Logs {
@@ -710,33 +720,64 @@ fn execute(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Action::Stop { id } => {
-            // An unambiguous prefix of an id `cones ls` prints names that session, as it does for
-            // `cones show`. Anything else must match exactly.
-            let mut matches: Vec<_> = if id.len() >= 4 {
+            let rows = if id.len() >= 4 {
                 cones::tui::fleet_rows(
                     &claude,
                     &state,
                     &Ledger::new(&state)?.runs()?,
                     &config::defaults(&jobs_path),
                 )?
-                .into_iter()
-                .map(|s| s.session_id)
-                .filter(|s| s.starts_with(&id))
-                .collect()
             } else {
                 Vec::new()
             };
-            // Rows sharing one id are the same name; which of them it means is the stop's call.
-            matches.sort();
-            matches.dedup();
-            ensure!(
-                matches.len() < 2,
-                "{id} matches {} sessions: {}",
-                matches.len(),
-                matches.join(", ")
-            );
-            let id = matches.first().unwrap_or(&id);
-            print!("{}", cones::stop::session(&state, &claude, id)?);
+            let ids = rows.into_iter().map(|s| s.session_id);
+            let id = by_prefix(ids, &id)?;
+            print!("{}", cones::stop::session(&state, &claude, &id)?);
+            Ok(0)
+        }
+        Action::Rm {
+            job: Some(name), ..
+        } => {
+            let runs = Ledger::new(&state)?.runs()?;
+            if let Some(run) = runs
+                .iter()
+                .find(|r| r.started.job.as_deref() == Some(&name) && r.status() == "started")
+            {
+                bail!(
+                    "job {name} is running as {}; `cones stop {}` ends it first",
+                    run.started.run_id,
+                    run.started.run_id
+                );
+            }
+            config::write_job(&jobs_path, Some(&name), None)?;
+            launchd::install(
+                &config::read_jobs(&jobs_path)?,
+                &std::env::current_exe()?,
+                &fs::canonicalize(&jobs_path)?,
+                &state,
+                false,
+            )
+            .with_context(|| {
+                format!("job {name} deleted, but reinstalling the schedules failed")
+            })?;
+            println!("deleted job {name}; schedules reinstalled");
+            Ok(0)
+        }
+        Action::Rm { id, .. } => {
+            let id = id.context("an id or --job")?;
+            let runs = Ledger::new(&state)?.runs()?;
+            let rows =
+                cones::tui::fleet_rows(&claude, &state, &runs, &config::defaults(&jobs_path))?;
+            let ids = rows
+                .iter()
+                .map(|s| s.session_id.clone())
+                .chain(runs.iter().map(|r| r.started.run_id.clone()));
+            let id = if id.len() >= 4 {
+                by_prefix(ids, &id)?
+            } else {
+                id
+            };
+            print!("{}", cones::stop::remove(&state, &claude, &rows, &id)?);
             Ok(0)
         }
         Action::Skill { name } => {
@@ -1173,4 +1214,19 @@ fn shell_command(cwd: &std::ffi::OsStr, command: &Command) -> String {
 
 fn quote(s: &std::ffi::OsStr) -> String {
     format!("'{}'", s.to_string_lossy().replace('\'', "'\\''"))
+}
+
+/// An unambiguous prefix of an id `cones ls` prints names that row, as it does for `cones show`.
+/// Anything else must match exactly. Rows sharing one id are the same name.
+fn by_prefix(ids: impl Iterator<Item = String>, id: &str) -> Result<String> {
+    let mut matches: Vec<_> = ids.filter(|s| s.starts_with(id)).collect();
+    matches.sort();
+    matches.dedup();
+    ensure!(
+        matches.len() < 2,
+        "{id} matches {} sessions: {}",
+        matches.len(),
+        matches.join(", ")
+    );
+    Ok(matches.pop().unwrap_or_else(|| id.to_owned()))
 }
