@@ -8,8 +8,8 @@
 //! and the shell's pty is resized to the pane's; a drag past the edge stops at 30 percent
 //! for the list; each release saves the share as `pane.ratio` in jobs.yaml, and a restarted
 //! dashboard draws the divider where the last drag left it. A wheel report split across two
-//! reads, its Esc alone and then its text, never reaches the shell, while a typed Esc still
-//! does. No harness or model is started.
+//! reads, its Esc alone and then its text, never reaches the shell or the list's new-agent
+//! input, while a typed Esc still reaches the shell. No harness or model is started.
 use crate::dashboard::*;
 use std::fs;
 
@@ -171,5 +171,26 @@ fn a_split_wheel_report_never_reaches_the_pane() {
     });
     d.press("ctrl+z", CTRL_Z);
     d.wait_for("the list", |s| s.contains("tab pane"));
+    d.quit();
+}
+
+#[test]
+fn a_split_wheel_report_never_reaches_the_list_input() {
+    let mut d = Dashboard::new("list-split-wheel-report", &[]);
+    d.start();
+    d.wait_text("Type a command");
+    d.burst("wheel report, Esc", b"\x1b");
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    d.press("wheel report, text", b"[<65;80;5M");
+    d.typed("ok");
+    let screen = d.wait_text("› ok");
+    d.capture("typed");
+    assert!(
+        !screen.contains("[<"),
+        "the report reached the input:\n{screen}"
+    );
+    d.wait_file("state/tui-debug.log", |s| {
+        s.contains("input.split_mouse_report")
+    });
     d.quit();
 }

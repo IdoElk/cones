@@ -60,10 +60,10 @@ fn is_bare_esc(e: &Event) -> bool {
 
 /// A wheel report split across two reads reaches crossterm as a bare Esc and then its text,
 /// `[<65;127;56M`. Forwarded to a pane, the Esc interrupts the client and the text lands in
-/// its prompt. After a bare Esc, read on for a moment: `None` when the events complete a
+/// its prompt; in the list, the Esc clears the new-agent input and the text fills it. After a bare Esc, read on for a moment: `None` when the events complete a
 /// report, which is dropped with the Esc, otherwise the events read, to be handled in order.
 fn split_mouse_report() -> Result<Option<Vec<Event>>> {
-    // ponytail: fixed 50ms hold on Esc, only while a pane has focus; the two reads of one
+    // ponytail: fixed 50ms hold on Esc; the two reads of one
     // report land microseconds apart, and a typed Esc waits no longer than a frame or three.
     let deadline = Instant::now() + Duration::from_millis(50);
     let mut read = Vec::new();
@@ -17412,7 +17412,7 @@ pub fn run(
                     None => event::read()?,
                 };
                 redraw = true;
-                if replay.is_empty() && app.focus.is_some() && is_bare_esc(&e) {
+                if replay.is_empty() && is_bare_esc(&e) {
                     match split_mouse_report()? {
                         Some(after) => replay.extend(after),
                         None => {
