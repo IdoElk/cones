@@ -16267,6 +16267,22 @@ impl App {
             Mode::Normal => {
                 let armed = self.armed.take();
                 let searching_history = self.history_selected();
+                // Any movement folds unfolded details first, then moves as usual.
+                if self.unfolded.is_some()
+                    && matches!(
+                        action,
+                        KeyAction::Up
+                            | KeyAction::Down
+                            | KeyAction::Right
+                            | KeyAction::PageUp
+                            | KeyAction::PageDown
+                            | KeyAction::Home
+                            | KeyAction::End
+                    )
+                {
+                    self.unfolded = None;
+                    self.rebuild();
+                }
                 if self.on_button() && matches!(action, KeyAction::Left | KeyAction::Right) {
                     let n = MENU.len();
                     self.menu =

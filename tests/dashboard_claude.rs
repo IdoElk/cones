@@ -1795,24 +1795,24 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
         );
     }
 
-    // The details are not rows: down goes straight to the next session.
+    // Moving folds the details and still moves: down lands on the next session.
     d.press("down", DOWN);
-    let screen = d.wait_text(&format!("fixture attached to {}", rest.short));
-    assert!(selected(&screen).contains("Rest a while"), "{screen}");
-    assert!(
-        screen.contains(&fix.id),
-        "moving keeps the details open:\n{screen}"
-    );
-
-    d.press("up", UP);
-    d.wait_text(&format!("fixture attached to {}", fix.short));
-    d.press("left", b"\x1b[D");
     let screen = d.wait_for("the details folded", |s| !s.contains(&fix.id));
+    assert!(selected(&screen).contains("Rest a while"), "{screen}");
     d.capture("folded");
     assert!(
         row(&screen, "Fix the parser") + 1 == row(&screen, "Rest a while"),
         "{screen}"
     );
+
+    // Left again folds them in place.
+    d.press("up", UP);
+    d.wait_text(&format!("fixture attached to {}", fix.short));
+    d.press("left", b"\x1b[D");
+    d.wait_text(&fix.id);
+    d.press("left", b"\x1b[D");
+    let screen = d.wait_for("left folded the details", |s| !s.contains(&fix.id));
+    assert!(selected(&screen).contains("Fix the parser"), "{screen}");
     d.quit();
     for s in [&mut fix, &mut rest] {
         s.daemon.kill().unwrap();
