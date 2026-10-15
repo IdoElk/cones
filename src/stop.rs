@@ -53,24 +53,8 @@ pub fn session(state: &Path, claude: &Path, id: &str) -> Result<String> {
             ),
         });
     }
-    let records = crate::terminal_host::records(state);
-    // Exact host ids also work for shells and clients with no native discovery.
-    // Otherwise resolve the current row before matching its harness and owned pid.
-    let session = if records.iter().any(|r| r.matches_session(id, None)) {
-        None
-    } else {
-        crate::fleet::control_session(claude, id)?
-    };
-    let hosts: Vec<_> = records
-        .iter()
-        .filter(|r| r.matches_session(id, session.as_ref()))
-        .collect();
-    ensure!(
-        hosts.len() < 2,
-        "{id} names {} cones terminals; stop them by their own ids",
-        hosts.len()
-    );
-    if let Some(record) = hosts.first() {
+    let (host, session) = host(state, claude, id)?;
+    if let Some(record) = &host {
         // The host answers only once the native process it owns has exited, so this reply is the
         // verification and not an intention.
         crate::terminal_host::stop(record)
@@ -177,10 +161,39 @@ fn process(pid: u32) -> (String, String) {
     (next(), next())
 }
 
-/// `cones rm ID`: what the dashboard's confirmed `ctrl+x` does to a row with nothing left to
-/// stop. A finished run is hidden, a removable session loses its native record, a Codex thread is
-/// forgotten. Its conversation and output stay. Work still running is refused, so a removal never
-/// stands in for a stop.
+/// The cones terminal `id` names, if one does, and otherwise the session it names.
+fn host(
+    state: &Path,
+    claude: &Path,
+    id: &str,
+) -> Result<(
+    Option<crate::terminal_host::Record>,
+    Option<crate::fleet::Session>,
+)> {
+    let records = crate::terminal_host::records(state);
+    // Exact host ids also work for shells and clients with no native discovery.
+    // Otherwise resolve the current row before matching its harness and owned pid.
+    let session = if records.iter().any(|r| r.matches_session(id, None)) {
+        None
+    } else {
+        crate::fleet::control_session(claude, id)?
+    };
+    let mut hosts: Vec<_> = records
+        .into_iter()
+        .filter(|r| r.matches_session(id, session.as_ref()))
+        .collect();
+    ensure!(
+        hosts.len() < 2,
+        "{id} names {} cones terminals; stop them by their own ids",
+        hosts.len()
+    );
+    Ok((hosts.pop(), session))
+}
+
+/// `cones rm ID`: what the dashboard's confirmed `ctrl+x` does to the row `id` names. A run is
+/// stopped if it is still going and hidden; a cones terminal is stopped; a Claude background
+/// session loses its job record; a Codex thread is forgotten; any other session is sent the
+/// verified signal the dashboard sends. Conversations and output stay.
 pub fn remove(
     state: &Path,
     claude: &Path,
@@ -189,14 +202,22 @@ pub fn remove(
 ) -> Result<String> {
     let ledger = crate::ledger::Ledger::new(state)?;
     if let Ok(run) = ledger.resolve(id) {
-        ensure!(
-            run.status() != "started",
-            "run {id} is still running; `cones stop {id}` ends it first"
-        );
-        ledger.hide(&run.started.run_id)?;
+        let run_id = run.started.run_id;
+        let stopped = run.terminal.is_none()
+            && run.started.status != crate::ledger::Status::Skipped
+            && crate::runner::stop(&ledger, claude, &run_id)?;
+        ledger.hide(&run_id)?;
+        let verb = if stopped { "stopped and hid" } else { "hid" };
         return Ok(format!(
-            "hid run {} from the dashboard; its output and ledger record are kept\n",
-            run.started.run_id
+            "{verb} run {run_id}; its output and ledger record are kept\n"
+        ));
+    }
+    if let (Some(record), _) = host(state, claude, id)? {
+        crate::terminal_host::stop(&record)
+            .with_context(|| format!("stopping the cones terminal for {id}"))?;
+        return Ok(format!(
+            "stopped the cones terminal running {} for {id}\n",
+            record.session.harness
         ));
     }
     let session = rows
@@ -225,9 +246,14 @@ pub fn remove(
                 spec.name
             ))
         }
-        harness::spec::Stop::Signal => bail!(
-            "{} session {id} has no record to remove; `cones stop {id}` ends it",
-            spec.name
-        ),
+        // The dashboard's stop: the process is checked to be this harness's before the signal.
+        harness::spec::Stop::Signal => Ok(if crate::fleet::stop(claude, id)? {
+            format!(
+                "stopped {} session {id}; its conversation is kept\n",
+                spec.name
+            )
+        } else {
+            format!("{} session {id} had already ended\n", spec.name)
+        }),
     }
 }

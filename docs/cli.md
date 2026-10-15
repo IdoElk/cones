@@ -34,7 +34,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones show ID [--tail N] [--all] [--json]` | [Read a session's conversation](#reading-a-conversation). |
 | `cones mcp` | Serve [history tools over MCP stdio](#history-over-mcp). |
 | `cones stop ID` | [Stop a session](#stopping-a-session) and keep its conversation. |
-| `cones rm ID`, `cones rm --job NAME` | [Remove a row](#removing-a-row) the way the dashboard's confirmed `ctrl+x` does. |
+| `cones rm TARGET` | Do to a run, session, job or folder what the dashboard's [`ctrl+x` twice](#removing-a-row) does. |
 | `cones comms [--dir PATH] send\|mail\|wait ...` | [Write to the agents in a folder, read their replies and wait for one](#comms). |
 | `cones config [--check]` | Print the `jobs.yaml` path, editing notes and the full [configuration reference](jobs.md), for you or an agent to edit the file directly. `--check` validates the file. |
 | `cones config set KEY VALUE`, `cones config unset KEY` | Set one [setting](jobs.md) by dotted path, such as `columns`, `highlight` or `defaults.model`, or remove it to restore the built-in. VALUE is YAML, so a list is `'[state, bypass, model]'`. Only that top-level block is rewritten; a value the file would refuse leaves it unchanged. Jobs are not settable here. |
@@ -42,7 +42,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 
 ### Reading runs and sessions
 
-`cones ls` prints the dashboard's rows for a script: the ledger's runs, then the live sessions no run owns. Text rows are tab-separated: id, job or folder, status, start time, harness, cost, then a run's reason or a session's tokens. The column names go to stderr, so stdout is rows only, and the model is in `--json`. Text timestamps use your local timezone and include its UTC offset. `--job` and `--status` narrow the read; naming a job leaves the sessions out, since a session belongs to no job.
+`cones ls` prints the dashboard's rows for a script: the ledger's runs, then the live sessions no run owns. A run the dashboard hid is left out. Text rows are tab-separated: id, job or folder, status, start time, harness, cost, then a run's reason or a session's tokens. The column names go to stderr, so stdout is rows only, and the model is in `--json`. Text timestamps use your local timezone and include its UTC offset. `--job` and `--status` narrow the read; naming a job leaves the sessions out, since a session belongs to no job.
 
 `--dir` keeps the rows whose folder is that path or sits under it. This includes worktrees stored inside the directory; linked worktrees elsewhere are not included merely because they share a repository. Both sides are resolved first, so a folder reached through a symlink still matches. A row that reports no folder is not in any folder, so a scoped read leaves it out.
 
@@ -256,18 +256,21 @@ The dashboard has separate [stop/removal controls](harness.md#native-actions).
 
 ### Removing a row
 
-`cones rm` does what a second `ctrl+x` does to a row with nothing left to stop. The id or
-unambiguous prefix comes from `cones ls`.
+`cones rm TARGET` is the dashboard's `ctrl+x` twice on the row TARGET names: a job's name, an
+open folder's path (anything with a `/` or starting with `~`), or a run or session id or
+unambiguous prefix from `cones ls`.
 
 | Target | Operation |
 | --- | --- |
-| Finished run | Hidden from the dashboard; output and ledger record remain, and `cones ls` still prints it. |
+| Running run | Stopped, recorded `stopped`, and hidden. |
+| Finished run | Hidden; output and ledger record remain. |
+| Running job | Its run stopped and hidden; the job stays. |
+| Idle job | Deleted from `jobs.yaml`, the rest of the file as written, then schedules reinstalled. |
+| Cones terminal | Host and client stopped. |
 | Claude background | Native `claude rm`, as the [dashboard](harness.md#native-actions) runs it; the transcript remains. |
 | Codex daemon thread | Forgotten and hidden, its client closed; the thread stays resumable from history. |
-| `--job NAME` | Deleted from `jobs.yaml`, the rest of the file as written, then schedules reinstalled. |
-
-A running run or job and a session that only a signal ends are refused with the `cones stop`
-that ends them. Closing an empty dashboard folder has no command.
+| Other session | SIGTERM to the process, once it is verified to be that harness's. |
+| Open folder | Closed; the directory and any pin remain. A running dashboard drops the row on its next refresh. |
 
 ## Coordinator
 

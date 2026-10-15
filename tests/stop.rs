@@ -998,102 +998,73 @@ fn rm_removes_a_background_session_record_and_keeps_its_transcript() {
     );
 }
 
-/// Removal never stands in for a stop: an interactive session and a running run are refused with
-/// the stop that ends them, and reach no harness. A finished run is hidden and leaves the ledger.
+/// An interactive client gets the dashboard's verified SIGTERM, and a finished run is hidden from
+/// the dashboard and from `cones ls` while the ledger keeps it. Neither reaches the native CLI.
 #[test]
-fn rm_hides_a_finished_run_and_refuses_what_only_a_stop_ends() {
+fn rm_signals_an_interactive_client_and_hides_a_finished_run() {
     use cones::ledger::{Ledger, Record, Status};
     let f = Fixture::new();
-    fs::write(f.home().join("allow-rm"), "").unwrap();
     let id = "eeeeeeee-5555-4555-8555-555555555555";
-    let idle = Idle::new();
-    f.live(id, "interactive", idle.0.id());
+    // `ps` reports argv[0], so a link named `claude` is what the signal checks for.
+    let link = f.root.path().join("claude");
+    std::os::unix::fs::symlink("/bin/sleep", &link).unwrap();
+    let mut client = Command::new(&link);
+    client.arg("120").stdin(Stdio::null());
+    own_session(&mut client, true);
+    let mut client = client.spawn().unwrap();
+    f.live(id, "interactive", client.id());
+
     let out = f.cones(&["rm", id]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        text(&out.stderr).contains(&format!(
-            "has no record to remove; `cones stop {id}` ends it"
-        )),
-        "{}",
-        text(&out.stderr)
-    );
-    assert_eq!(f.calls(), "");
-    assert!(idle.alive());
-
-    let ledger = Ledger::new(&f.state()).unwrap();
-    let (running, finished) = ("run-running-0001", "run-finished-0002");
-    for (run, done) in [(running, false), (finished, true)] {
-        let mut started = Record::new(run.into(), Status::Started);
-        started.job = Some("nightly".into());
-        ledger.append(&started).unwrap();
-        if done {
-            ledger.append(&Record::new(run.into(), Status::Ok)).unwrap();
-        }
-    }
-    let out = f.cones(&["rm", running]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        text(&out.stderr).contains(&format!(
-            "run {running} is still running; `cones stop {running}`"
-        )),
-        "{}",
-        text(&out.stderr)
-    );
-
-    let out = f.cones(&["rm", finished]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(
         text(&out.stdout),
-        format!("hid run {finished} from the dashboard; its output and ledger record are kept\n")
+        format!("stopped claude session {id}; its conversation is kept\n")
     );
+    let ended = client.wait().unwrap();
     assert_eq!(
-        ledger.hidden().unwrap().into_iter().collect::<Vec<_>>(),
-        vec![finished.to_owned()]
+        std::os::unix::process::ExitStatusExt::signal(&ended),
+        Some(libc::SIGTERM)
+    );
+
+    let ledger = Ledger::new(&f.state()).unwrap();
+    let run = "run-finished-0002";
+    let mut started = Record::new(run.into(), Status::Started);
+    started.job = Some("nightly".into());
+    ledger.append(&started).unwrap();
+    ledger.append(&Record::new(run.into(), Status::Ok)).unwrap();
+    let out = f.cones(&["rm", run]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("hid run {run}; its output and ledger record are kept\n")
     );
     assert_eq!(
         ledger.runs().unwrap().len(),
-        2,
+        1,
         "the ledger keeps the hidden run"
+    );
+    assert!(
+        !f.rows().iter().any(|r| r["started"]["run_id"] == run),
+        "{:?}",
+        f.rows()
     );
     assert_eq!(f.calls(), "");
 }
 
-/// `cones rm --job` deletes that block and leaves the rest of the file as written, then
-/// reinstalls the schedules. A file at `$HOME/Library` stops the install before any `launchctl`
-/// call reaches the machine's real domain, so the failure is reported after the delete. A job
-/// with a running run is refused with the stop that ends it.
+/// `cones rm NAME` on an idle job deletes that block and leaves the rest of the file as written,
+/// then reinstalls the schedules. A file at `$HOME/Library` stops the install before any
+/// `launchctl` call reaches the machine's real domain, so the failure is reported after the
+/// delete.
 #[test]
-fn rm_job_deletes_its_block_and_refuses_a_running_one() {
-    use cones::ledger::{Ledger, Record, Status};
+fn rm_deletes_an_idle_job_and_leaves_the_rest_of_the_file() {
     let f = Fixture::new();
     fs::write(f.root.path().join("Library"), "no LaunchAgents here\n").unwrap();
     let jobs = f.root.path().join("jobs.yaml");
     let kept = "  # kept as written\n  - name: keep\n    schedule: '0 3 * * *'\n    cwd: /tmp\n    prompt: keep\n";
     let gone = "  - name: gone\n    schedule: '0 4 * * *'\n    cwd: /tmp\n    prompt: gone\n";
     fs::write(&jobs, format!("version: 4\njobs:\n{kept}{gone}")).unwrap();
-    let jobs_arg = jobs.to_str().unwrap();
 
-    let mut started = Record::new("run-gone-0001".into(), Status::Started);
-    started.job = Some("gone".into());
-    let ledger = Ledger::new(&f.state()).unwrap();
-    ledger.append(&started).unwrap();
-    let out = f.cones(&["--jobs", jobs_arg, "rm", "--job", "gone"]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        text(&out.stderr)
-            .contains("job gone is running as run-gone-0001; `cones stop run-gone-0001`"),
-        "{}",
-        text(&out.stderr)
-    );
-    assert_eq!(
-        fs::read_to_string(&jobs).unwrap(),
-        format!("version: 4\njobs:\n{kept}{gone}")
-    );
-
-    ledger
-        .append(&Record::new("run-gone-0001".into(), Status::Ok))
-        .unwrap();
-    let out = f.cones(&["--jobs", jobs_arg, "rm", "--job", "gone"]);
+    let out = f.cones(&["--jobs", jobs.to_str().unwrap(), "rm", "gone"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
         text(&out.stderr).contains("job gone deleted, but reinstalling the schedules failed"),
@@ -1104,6 +1075,43 @@ fn rm_job_deletes_its_block_and_refuses_a_running_one() {
         fs::read_to_string(&jobs).unwrap(),
         format!("version: 4\njobs:\n{kept}")
     );
+}
+
+/// `cones rm DIR` closes an open folder, by path or under `~`, and leaves the directory. One that
+/// is not open is refused and the file is left as it was.
+#[test]
+fn rm_closes_an_open_folder_and_keeps_the_directory() {
+    let f = Fixture::new();
+    let (one, two) = (f.root.path().join("one"), f.root.path().join("two"));
+    fs::create_dir_all(&one).unwrap();
+    fs::create_dir_all(&two).unwrap();
+    let file = f.state().join("open-folders.json");
+    fs::write(&file, json!([one, two]).to_string()).unwrap();
+
+    let out = f.cones(&["rm", one.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!(
+            "closed {}; the folder itself and any pin are untouched\n",
+            one.display()
+        )
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), json!([two]).to_string());
+    assert!(one.is_dir());
+
+    let out = f.cones(&["rm", "~/two"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(fs::read_to_string(&file).unwrap(), "[]");
+
+    let out = f.cones(&["rm", "~/two"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("is not an open folder"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "[]");
 }
 
 /// `cones rm` on a saved Codex thread forgets it the way the dashboard does: the saved record goes

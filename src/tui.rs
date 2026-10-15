@@ -8174,6 +8174,26 @@ fn write_open_folders(state: &Path, open: &BTreeSet<PathBuf>) -> std::io::Result
     std::fs::write(state.join(OPEN_FOLDERS), serde_json::to_vec(&dirs).unwrap())
 }
 
+fn read_open_folders(state: &Path) -> Option<BTreeSet<PathBuf>> {
+    serde_json::from_slice(&std::fs::read(state.join(OPEN_FOLDERS)).ok()?).ok()
+}
+
+/// `cones rm DIR`: close an open folder as the dashboard's `ctrl+x` does. The directory and any
+/// pin stay; a running dashboard picks the change up on its next refresh.
+pub fn close_folder(state: &Path, dir: &Path) -> Result<()> {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let mut open = read_open_folders(state).unwrap_or_default();
+    let before = open.len();
+    open.retain(|p| real(p) != real(dir));
+    anyhow::ensure!(
+        open.len() < before,
+        "{} is not an open folder",
+        fleet::tilde(dir)
+    );
+    write_open_folders(state, &open)?;
+    Ok(())
+}
+
 const HISTORY_PAGE: usize = 50;
 const HISTORY_PREFETCH: usize = 10;
 
@@ -9341,10 +9361,7 @@ impl App {
         let mut data =
             Data::load_observed(jobs_path, state, claude, log.as_ref(), operation.as_ref())?;
         let start = data.start;
-        let mut open: BTreeSet<PathBuf> = std::fs::read(state.join(OPEN_FOLDERS))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let mut open = read_open_folders(state).unwrap_or_default();
         if open_folders(&mut open, &mut data, &HashSet::new()) {
             // ponytail: a failed write only loses the change on restart; the next one retries.
             let _ = write_open_folders(state, &open);
@@ -14957,6 +14974,10 @@ impl App {
 
     /// Keep open the folder of every session that arrived since the last read.
     fn open_folders_of(&mut self, data: &mut Data) {
+        // The file is the shared copy: `cones rm DIR` and other dashboards change it too.
+        if let Some(open) = read_open_folders(&self.state) {
+            self.open_folders = open;
+        }
         let known = self
             .data
             .sessions

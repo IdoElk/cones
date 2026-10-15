@@ -376,6 +376,30 @@ fn following_output_can_detach_without_stopping_the_job() {
     assert_eq!(ended.reason.as_deref(), Some("interrupted"));
 }
 
+/// `cones rm JOB` on a running job is the dashboard's `ctrl+x` twice on its row: the run is
+/// stopped and its row hidden, and the job itself stays in the file.
+#[test]
+fn rm_on_a_running_job_stops_its_run_and_keeps_the_job() {
+    let f = Fixture::new("hang", 0.5);
+    let (mut job, id) = f.start();
+    let before = fs::read_to_string(&f.jobs).unwrap();
+    let out = f.command().args(["rm", "test"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("stopped and hid run {id}; its output and ledger record are kept\n")
+    );
+    assert_eq!(job.wait().unwrap().code(), Some(1));
+    let ended = f.ledger().resolve(&id).unwrap().terminal.unwrap();
+    assert_eq!(ended.status, Status::Stopped);
+    assert!(f.ledger().hidden().unwrap().contains(&id));
+    assert_eq!(fs::read_to_string(&f.jobs).unwrap(), before);
+}
+
 #[test]
 fn read_only_allow_runs_can_overlap() {
     let f = Fixture::new("hang", 0.5);

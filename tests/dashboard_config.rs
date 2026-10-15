@@ -691,3 +691,50 @@ fn a_failed_write_can_be_retried_once_the_cause_is_fixed() {
     d.press("esc", ESC);
     d.quit();
 }
+
+/// `cones rm DIR` from another terminal closes a folder in a running dashboard: the open list on
+/// disk is the shared copy, so the row leaves on the next refresh and the other folder stays.
+#[test]
+fn a_folder_closed_with_cones_rm_leaves_a_running_dashboard() {
+    let mut d = Dashboard::new("config_rm_folder", &["claude"]);
+    let extra = d.path("extra");
+    fs::create_dir_all(&extra).unwrap();
+    d.open_folders(&[d.project(), extra.clone()]);
+    let (project, extra_row) = (
+        d.project().display().to_string(),
+        extra.display().to_string(),
+    );
+    d.start();
+    d.wait_for("both folder rows", |s| {
+        empty_folder_row(s, &project) && empty_folder_row(s, &extra_row)
+    });
+    d.capture("both-open");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_cones"))
+        .env("HOME", d.home())
+        .args([
+            "--jobs".as_ref(),
+            d.path("jobs.yaml").as_os_str(),
+            "--state-dir".as_ref(),
+            d.path("state").as_os_str(),
+            "rm".as_ref(),
+            extra.as_os_str(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let screen = d.wait_for("the closed folder to leave", |s| {
+        !empty_folder_row(s, &extra_row)
+    });
+    d.capture("closed-from-cli");
+    assert!(empty_folder_row(&screen, &project), "{screen}");
+    assert!(extra.is_dir());
+    let open = fs::read_to_string(d.path("state/open-folders.json")).unwrap();
+    assert!(!open.contains(&extra_row), "{open}");
+    d.keep("state/open-folders.json");
+}

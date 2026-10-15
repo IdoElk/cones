@@ -169,15 +169,12 @@ enum Action {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
         id: String,
     },
-    /// Remove what the dashboard's ctrl+x removes: a finished run, a session record, a Codex
-    /// thread or a job; see docs/cli.md.
+    /// What the dashboard's ctrl+x twice does to a row: stop it, remove it or close it; see
+    /// docs/cli.md.
     Rm {
-        /// The run or session id as `cones ls` prints it, or an unambiguous prefix of one.
-        #[arg(required_unless_present = "job", conflicts_with = "job")]
-        id: Option<String>,
-        /// Delete this job from jobs.yaml and reinstall the schedules.
-        #[arg(long)]
-        job: Option<String>,
+        /// A run or session id as `cones ls` prints it or an unambiguous prefix of one, a job
+        /// name, or an open folder's path.
+        target: String,
     },
     /// A run's captured output; the dashboard opens this in a viewer.
     #[command(name = "__logs", hide = true)]
@@ -646,9 +643,13 @@ fn execute(cli: Cli) -> Result<i32> {
             if !json {
                 eprintln!("id\tjob or folder\tstatus\tstarted\tharness\tcost\treason or tokens");
             }
+            // A run the dashboard hid is out of its rows here too; the ledger keeps it.
+            let hidden = ledger.hidden()?;
             for run in ledger.runs()?.into_iter().rev().filter(|r| {
-                job.as_ref()
-                    .is_none_or(|j| r.started.job.as_ref() == Some(j))
+                !hidden.contains(&r.started.run_id)
+                    && job
+                        .as_ref()
+                        .is_none_or(|j| r.started.job.as_ref() == Some(j))
                     && status.as_ref().is_none_or(|s| r.status() == *s)
                     && inside(
                         r.started
@@ -735,47 +736,59 @@ fn execute(cli: Cli) -> Result<i32> {
             print!("{}", cones::stop::session(&state, &claude, &id)?);
             Ok(0)
         }
-        Action::Rm {
-            job: Some(name), ..
-        } => {
-            let runs = Ledger::new(&state)?.runs()?;
-            if let Some(run) = runs
-                .iter()
-                .find(|r| r.started.job.as_deref() == Some(&name) && r.status() == "started")
-            {
-                bail!(
-                    "job {name} is running as {}; `cones stop {}` ends it first",
-                    run.started.run_id,
-                    run.started.run_id
-                );
+        Action::Rm { target } => {
+            let ledger = Ledger::new(&state)?;
+            let runs = ledger.runs()?;
+            let jobs = config::read_jobs(&jobs_path).unwrap_or_default();
+            if jobs.iter().any(|j| j.name == target) {
+                // A running job's row stops its run, as in the dashboard; an idle one is deleted.
+                if let Some(run) = runs
+                    .iter()
+                    .rev()
+                    .find(|r| r.started.job.as_deref() == Some(&target) && r.status() == "started")
+                {
+                    print!(
+                        "{}",
+                        cones::stop::remove(&state, &claude, &[], &run.started.run_id)?
+                    );
+                    return Ok(0);
+                }
+                config::write_job(&jobs_path, Some(&target), None)?;
+                launchd::install(
+                    &config::read_jobs(&jobs_path)?,
+                    &std::env::current_exe()?,
+                    &fs::canonicalize(&jobs_path)?,
+                    &state,
+                    false,
+                )
+                .with_context(|| {
+                    format!("job {target} deleted, but reinstalling the schedules failed")
+                })?;
+                println!("deleted job {target}; schedules reinstalled");
+                return Ok(0);
             }
-            config::write_job(&jobs_path, Some(&name), None)?;
-            launchd::install(
-                &config::read_jobs(&jobs_path)?,
-                &std::env::current_exe()?,
-                &fs::canonicalize(&jobs_path)?,
-                &state,
-                false,
-            )
-            .with_context(|| {
-                format!("job {name} deleted, but reinstalling the schedules failed")
-            })?;
-            println!("deleted job {name}; schedules reinstalled");
-            Ok(0)
-        }
-        Action::Rm { id, .. } => {
-            let id = id.context("an id or --job")?;
-            let runs = Ledger::new(&state)?.runs()?;
+            // No id holds a slash, so a path names a folder.
+            if target.contains('/') || target.starts_with('~') || target == "." || target == ".." {
+                let dir = match target.strip_prefix('~') {
+                    Some(rest) => {
+                        PathBuf::from(std::env::var("HOME")?).join(rest.trim_start_matches('/'))
+                    }
+                    None => PathBuf::from(&target),
+                };
+                cones::tui::close_folder(&state, &dir)?;
+                println!("closed {target}; the folder itself and any pin are untouched");
+                return Ok(0);
+            }
             let rows =
                 cones::tui::fleet_rows(&claude, &state, &runs, &config::defaults(&jobs_path))?;
             let ids = rows
                 .iter()
                 .map(|s| s.session_id.clone())
                 .chain(runs.iter().map(|r| r.started.run_id.clone()));
-            let id = if id.len() >= 4 {
-                by_prefix(ids, &id)?
+            let id = if target.len() >= 4 {
+                by_prefix(ids, &target)?
             } else {
-                id
+                target
             };
             print!("{}", cones::stop::remove(&state, &claude, &rows, &id)?);
             Ok(0)
