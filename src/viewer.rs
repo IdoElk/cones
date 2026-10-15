@@ -26,8 +26,8 @@ pub use vt100::MouseProtocolMode;
 const STDERR_TAIL: usize = 16 * 1024;
 /// Input the viewer has not read yet; beyond this it is not reading at all.
 const INPUT_CAP: usize = 8 * 1024 * 1024;
-/// Bound pump time so output floods cannot block input. Wait briefly between reads
-/// to collect macOS's 1 KiB PTY chunks into a frame.
+/// Bound pump time so output floods cannot block input. Once output arrives, wait briefly
+/// between reads to collect macOS's 1 KiB PTY chunks into a frame.
 const PUMP_MAX: Duration = Duration::from_millis(50);
 const PUMP_WAIT: Duration = Duration::from_millis(1);
 const SCROLLBACK: usize = 1000;
@@ -671,7 +671,10 @@ impl Viewer {
                 }
                 Err(e) if e.raw_os_error() == Some(libc::EIO) => self.master_open = false,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    if started.elapsed() >= PUMP_MAX
+                    // Only output already arriving is worth waiting for; an idle viewer
+                    // returns at once, or every loop turn would cost a millisecond per viewer.
+                    if !dirty
+                        || started.elapsed() >= PUMP_MAX
                         || !readable(self.master.as_raw_fd(), PUMP_WAIT)
                     {
                         break;

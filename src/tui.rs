@@ -53,6 +53,24 @@ use std::{
 /// Capture the shell tty before raw mode; a later snapshot could preserve a child's raw settings.
 static SHELL_TTY: OnceLock<Option<libc::termios>> = OnceLock::new();
 
+/// How long queued wheel and pointer-motion events are handled without a frame.
+const POINTER_BATCH: Duration = Duration::from_millis(16);
+/// How long to wait for the next event of a wheel run. crossterm's `/dev/tty` source answers
+/// a zero timeout with no event, even with events parsed and waiting, so the wait is not zero.
+const POINTER_PEEK: Duration = Duration::from_millis(1);
+
+/// Wheel and pointer motion, which arrive in floods and only scroll or hover.
+fn is_pointer(e: &Event) -> bool {
+    matches!(e, Event::Mouse(m) if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight
+            | MouseEventKind::Moved
+    ))
+}
+
 /// Restore the shell's line discipline and disable reporting modes that would leak input to it.
 fn is_bare_esc(e: &Event) -> bool {
     matches!(e, Event::Key(k) if k.code == KeyCode::Esc && k.modifiers.is_empty() && k.kind == KeyEventKind::Press)
@@ -17342,93 +17360,111 @@ pub fn run(
         let mut redraw = true;
         // Events read past a bare Esc that turned out not to start a mouse report.
         let mut replay = std::collections::VecDeque::new();
+        // An event read to see whether it continues a wheel run, handled on the next turn.
+        let mut held = None;
+        // When the current run of wheel and pointer-motion events began.
+        let mut pointer_run: Option<Instant> = None;
         loop {
             // A closed terminal or a `kill` leaves through the same teardown as `q`, so the shell
             // gets its line discipline back and the viewers are reaped rather than hung up on.
             if signalled.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            app.tick = (animation.elapsed().as_millis() / 100) as usize;
-            if app.refreshed.elapsed() >= Duration::from_secs(1) {
-                app.reload();
-            }
-            app.poll();
-            app.history_tick();
-            let dirty = app.pump();
-            app.prespawn_tick();
-            app.transcript_tick();
-            app.review_focused();
-            app.expire();
-            app.report_view("event_loop");
-            app.summarize_timings(false);
-            let wants_mouse = app.wants_mouse();
-            if wants_mouse != app.mouse_capture {
-                if wants_mouse {
-                    execute!(std::io::stdout(), EnableMouseCapture)?;
-                } else {
-                    execute!(std::io::stdout(), DisableMouseCapture)?;
-                }
-                app.mouse_capture = wants_mouse;
-            }
-            if redraw
-                || dirty
-                || app.feedback.is_some()
-                || app.tick != drawn_tick
-                || app.refreshed != drawn_refresh
-            {
-                let drawing = Instant::now();
-                std::io::stdout().sync_update(|_| -> std::io::Result<()> {
-                    if app.needs_clear {
-                        // Avoid `Terminal::clear`: its cursor query fails on terminals that do not answer.
-                        // Clear the backend and forget the previous buffer instead.
-                        terminal.backend_mut().clear()?;
-                        terminal.swap_buffers();
-                        app.needs_clear = false;
+            // A trackpad sends wheel reports faster than frames, so queued ones are handled
+            // back to back and drawn once, at least once a frame. Anything else is drawn
+            // before, so a click is hit-tested against the layout on screen.
+            let batching = pointer_run.is_some_and(|at| at.elapsed() < POINTER_BATCH)
+                && match replay.front() {
+                    Some(e) => is_pointer(e),
+                    None if held.is_none() && event::poll(POINTER_PEEK)? => {
+                        is_pointer(held.insert(event::read()?))
                     }
-                    terminal.draw(|f| app.draw(f))?;
-                    Ok(())
-                })??;
-                let drawn_at = Instant::now();
-                app.measured(
-                    "draw",
-                    drawn_at.duration_since(drawing).as_secs_f64() * 1000.0,
-                    || {
-                        json!({
-                            "width": app.size.1, "height": app.size.0,
-                        })
-                    },
-                );
-                if let Some((phase, started)) = app.feedback.take()
-                    && phase != "input_to_draw"
-                {
-                    app.measured(
-                        phase,
-                        drawn_at.duration_since(started).as_secs_f64() * 1000.0,
-                        || json!({}),
-                    );
+                    None => false,
+                };
+            if !batching {
+                pointer_run = None;
+                app.tick = (animation.elapsed().as_millis() / 100) as usize;
+                if app.refreshed.elapsed() >= Duration::from_secs(1) {
+                    app.reload();
                 }
-                if let Some((operation, route)) = app.input_operation.take() {
+                app.poll();
+                app.history_tick();
+                let dirty = app.pump();
+                app.prespawn_tick();
+                app.transcript_tick();
+                app.review_focused();
+                app.expire();
+                app.report_view("event_loop");
+                app.summarize_timings(false);
+                let wants_mouse = app.wants_mouse();
+                if wants_mouse != app.mouse_capture {
+                    if wants_mouse {
+                        execute!(std::io::stdout(), EnableMouseCapture)?;
+                    } else {
+                        execute!(std::io::stdout(), DisableMouseCapture)?;
+                    }
+                    app.mouse_capture = wants_mouse;
+                }
+                if redraw
+                    || dirty
+                    || app.feedback.is_some()
+                    || app.tick != drawn_tick
+                    || app.refreshed != drawn_refresh
+                {
+                    let drawing = Instant::now();
+                    std::io::stdout().sync_update(|_| -> std::io::Result<()> {
+                        if app.needs_clear {
+                            // Avoid `Terminal::clear`: its cursor query fails on terminals that do not answer.
+                            // Clear the backend and forget the previous buffer instead.
+                            terminal.backend_mut().clear()?;
+                            terminal.swap_buffers();
+                            app.needs_clear = false;
+                        }
+                        terminal.draw(|f| app.draw(f))?;
+                        Ok(())
+                    })??;
+                    let drawn_at = Instant::now();
                     app.measured(
-                        "input_to_draw",
-                        drawn_at.duration_since(operation.started).as_secs_f64() * 1000.0,
+                        "draw",
+                        drawn_at.duration_since(drawing).as_secs_f64() * 1000.0,
                         || {
                             json!({
-                                "operation_id": operation.id, "route": route,
+                                "width": app.size.1, "height": app.size.0,
                             })
                         },
                     );
+                    if let Some((phase, started)) = app.feedback.take()
+                        && phase != "input_to_draw"
+                    {
+                        app.measured(
+                            phase,
+                            drawn_at.duration_since(started).as_secs_f64() * 1000.0,
+                            || json!({}),
+                        );
+                    }
+                    if let Some((operation, route)) = app.input_operation.take() {
+                        app.measured(
+                            "input_to_draw",
+                            drawn_at.duration_since(operation.started).as_secs_f64() * 1000.0,
+                            || {
+                                json!({
+                                    "operation_id": operation.id, "route": route,
+                                })
+                            },
+                        );
+                    }
+                    drawn_tick = app.tick;
+                    drawn_refresh = app.refreshed;
+                    redraw = false;
                 }
-                drawn_tick = app.tick;
-                drawn_refresh = app.refreshed;
-                redraw = false;
-            }
-            if app.poll_opening() {
-                continue;
+                if app.poll_opening() {
+                    continue;
+                }
             }
             // Poll between animation frames for responsive input and reloads without idle repaints.
             let wait = Duration::from_millis(if app.focus.is_some() { 8 } else { 25 });
-            if !replay.is_empty() || event::poll(wait)? {
-                let mut e = match replay.pop_front() {
+            if !replay.is_empty() || held.is_some() || event::poll(wait)? {
+                let mut e = match replay.pop_front().or_else(|| held.take()) {
                     Some(e) => e,
                     None => event::read()?,
                 };
@@ -17452,6 +17488,11 @@ pub fn run(
                     k.modifiers = KeyModifiers::SHIFT;
                 }
                 app.log_input(&e);
+                if is_pointer(&e) {
+                    pointer_run.get_or_insert_with(Instant::now);
+                } else {
+                    pointer_run = None;
+                }
                 match e {
                     Event::Key(k) if k.kind == KeyEventKind::Press => {
                         app.feedback = Some(("input_to_draw", Instant::now()));

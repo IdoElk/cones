@@ -8,7 +8,9 @@
 //! shorter than `start.min_prompt` that starts nothing until it is long enough, pre-existing
 //! sessions in every state grouped by folder and by state, arrows, the filter, pins and
 //! highlights, `ctrl+x` twice removing a session through `claude rm`, and a wrapped draft
-//! whose cursor follows a click and the arrows, which reach the list only from its edge rows.
+//! whose cursor follows a click and the arrows, which reach the list only from its edge rows,
+//! and a trackpad's flood of wheel reports reaching a focused pane whole and in order within a
+//! few frames, while idle viewers cost no wait.
 use crate::dashboard::*;
 use serde_json::{Value, json};
 use std::{
@@ -1645,4 +1647,84 @@ fn arrows_walk_the_rows_of_a_wrapped_draft_before_they_reach_the_list() {
     );
     d.capture("back-in-the-draft");
     d.quit();
+}
+
+/// The input-to-draw measurements and the mean viewer pump in every timing summary of the
+/// debug log: how many frames followed input, and what a pump cost.
+fn input_frames_and_pump_ms(log: &str) -> (u64, f64) {
+    let (mut frames, mut pumps, mut pump_ms) = (0, 0, 0.0);
+    for record in records(log) {
+        if record["event"] != "timing.summary" {
+            continue;
+        }
+        let phases = &record["data"]["phases"];
+        frames += phases["input_to_draw"]["count"].as_u64().unwrap_or(0);
+        let count = phases["viewer_pump"]["count"].as_u64().unwrap_or(0);
+        pumps += count;
+        pump_ms += phases["viewer_pump"]["mean_ms"].as_f64().unwrap_or(0.0) * count as f64;
+    }
+    (frames, pump_ms / pumps.max(1) as f64)
+}
+
+#[test]
+fn a_wheel_flood_reaches_the_pane_whole_in_a_few_frames() {
+    const REPORTS: usize = 600;
+    let mut d = Dashboard::new("claude-wheel-flood", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    fs::write(d.home().join("fake-attach-fullscreen"), "").unwrap();
+    fs::write(d.home().join("fake-attach-mouse"), "").unwrap();
+    let project = real_project(&d);
+    let seeded: Vec<Seeded> = ["Rest a while", "Rest some more", "Rest again"]
+        .iter()
+        .enumerate()
+        .map(|(i, title)| seed(&d, &project, i as u32 + 1, title, "idle", None))
+        .collect();
+    d.start();
+    d.wait_text("fixture attached to");
+    d.press("right", b"\x1b[C");
+    d.wait_text("tab back · ctrl+\\ full screen");
+
+    // A trackpad flick: hundreds of wheel reports over the pane, faster than any frame.
+    d.burst("wheel flood", &b"\x1b[<64;100;10M".repeat(REPORTS));
+    let forwarded = |text: &str| -> String {
+        records(text)
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    };
+    // A report split across two reads is dropped whole; every other one reaches the client.
+    let split = || {
+        fs::read_to_string(d.path("state/tui-debug.log"))
+            .unwrap_or_default()
+            .matches("input.split_mouse_report")
+            .count()
+    };
+    let input = d.wait_file("home/attach-input.jsonl", |t| {
+        forwarded(t).matches("\x1b[<64;").count() + split() >= REPORTS
+    });
+    d.keep("home/attach-input.jsonl");
+    // In order and with nothing else among them.
+    let input = forwarded(&input);
+    let report = input.split_inclusive('M').next().unwrap().to_owned();
+    assert!(report.starts_with("\x1b[<64;"), "{report:?}");
+    assert_eq!(input, report.repeat(REPORTS - split()));
+    d.press("tab", b"\t");
+    d.quit();
+
+    let log = fs::read_to_string(d.path("state/tui-debug.log")).unwrap();
+    let (frames, pump_ms) = input_frames_and_pump_ms(&log);
+    // One frame per batch of queued wheel reports, not one per report.
+    assert!(
+        frames < REPORTS as u64 / 4,
+        "{frames} frames followed input"
+    );
+    // An idle viewer's pump returns at once instead of waiting for output that never comes.
+    assert!(
+        pump_ms < 0.5,
+        "a viewer pump took {pump_ms:.2}ms on average"
+    );
+    for mut s in seeded {
+        s.daemon.kill().unwrap();
+        s.daemon.wait().unwrap();
+    }
 }

@@ -15,7 +15,8 @@ background id back instead, the way the daemon can list a session before `--bg` 
 `attach` holds the pty as a viewer client until hung up. With `$HOME/fake-attach-fullscreen` it
 draws the composer of Claude's fullscreen renderer (`CLAUDE_CODE_NO_FLICKER=1`): hidden terminal
 cursor, inverse software caret after `❯`. Typed text becomes a draft and every read from the pty
-is logged to `$HOME/attach-input.jsonl`; `rm` ends the session the way the
+is logged to `$HOME/attach-input.jsonl`. `$HOME/fake-attach-mouse` also turns on SGR mouse
+reporting, as Claude's fullscreen renderer does, so wheel reports reach it. `rm` ends the session the way the
 daemon does: registry entry and job record removed, stand-in killed. With
 `$CLAUDE_CONFIG_DIR/rm-worktree-<short>` naming a worktree, `rm` refuses the way Claude does for
 unpushed commits until it is given `--discard-unpushed`.
@@ -53,8 +54,9 @@ if args[:1] == ["attach"] and (HOME / "fake-attach-fullscreen").exists():
     tty.setraw(fd)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     draft = ""
+    mouse = "\x1b[?1000h\x1b[?1006h" if (HOME / "fake-attach-mouse").exists() else ""
     while True:
-        sys.stdout.write(f"\x1b[?25l\x1b[2J\x1b[Hfixture attached to {args[1]}\r\n"
+        sys.stdout.write(f"{mouse}\x1b[?25l\x1b[2J\x1b[Hfixture attached to {args[1]}\r\n"
                          f"{'─' * 20}\r\n❯ {draft}\x1b[7m \x1b[0m\r\n{'─' * 20}")
         sys.stdout.flush()
         if not select.select([fd], [], [], 0.5)[0]:
