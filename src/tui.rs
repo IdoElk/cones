@@ -2614,9 +2614,14 @@ fn dim() -> Style {
 }
 
 /// A status that reports a problem. The mark it leads with moves it out of the hint bar and
-/// onto the composer's top rule, where it is drawn bold.
+/// onto the composer's top rule, where it is drawn bold. The rule is one row, so a harness's
+/// multi-line refusal is joined onto it.
 fn warning(message: impl std::fmt::Display) -> String {
-    format!("{WARNING}{message}")
+    let message = message.to_string();
+    format!(
+        "{WARNING}{}",
+        message.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
 }
 const WARNING: &str = "⚠ ";
 fn button() -> Style {
@@ -13444,8 +13449,11 @@ impl App {
             } else {
                 let error = String::from_utf8_lossy(open.viewer.stderr_tail());
                 match error.lines().rev().find(|line| !line.trim().is_empty()) {
-                    Some(line) => format!("{what} failed: {}", line.trim_start_matches("Error: ")),
-                    None => format!("{what} exited with {status}"),
+                    Some(line) => warning(format!(
+                        "{what} failed: {}",
+                        line.trim_start_matches("Error: ")
+                    )),
+                    None => warning(format!("{what} exited with {status}")),
                 }
             };
             if focused {
@@ -14421,12 +14429,12 @@ impl App {
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
                 let last = err.lines().rev().find(|l| !l.trim().is_empty());
-                format!(
+                warning(format!(
                     "{done} · install failed: {}",
                     last.unwrap_or("").trim_start_matches("Error: ")
-                )
+                ))
             }
-            Err(e) => format!("{done} · install failed: {e}"),
+            Err(e) => warning(format!("{done} · install failed: {e}")),
         };
     }
 
@@ -16025,8 +16033,8 @@ impl App {
                     if matches!(action.verb, "delete" | "forget") {
                         refused = Some(action.id.clone());
                     }
-                    // The outer message fits the hint line; the debug log keeps the whole chain.
-                    format!("{} failed: {}: {e}", action.verb, action.label)
+                    // The debug log keeps the whole chain.
+                    warning(format!("{} failed: {}: {e}", action.verb, action.label))
                 }
             };
         }
@@ -21400,10 +21408,15 @@ states:
         registry(d.path(), A, "/src/one", "idle", 1);
         let mut app = app(d.path());
         app.refresh().unwrap();
-        app.queue_stop(A.into(), "delete", || anyhow::bail!("harness refused"));
+        app.queue_stop(A.into(), "delete", || {
+            anyhow::bail!("harness refused\n  push them first")
+        });
         assert!(app.rows.iter().all(|r| r.kind.key() != Some(A)));
         poll_until(&mut app, |a| a.stopping.is_empty());
-        assert_eq!(app.status, "delete failed: aaaaaaaa: harness refused");
+        assert_eq!(
+            app.status,
+            "⚠ delete failed: aaaaaaaa: harness refused push them first"
+        );
         assert!(app.rows.iter().any(|r| r.kind.key() == Some(A)));
         assert!(app.removed_sessions.is_empty());
         poll_until(&mut app, |a| a.loading.is_none());
@@ -21449,7 +21462,7 @@ states:
         app.poll();
         assert!(app.stopping.is_empty());
         assert!(app.rows.iter().any(|r| r.kind.key() == Some(A)));
-        assert_eq!(app.status, "delete failed: aaaaaaaa: refused");
+        assert_eq!(app.status, "⚠ delete failed: aaaaaaaa: refused");
         poll_until(&mut app, |a| a.loading.is_none());
         assert_eq!(app.data.sessions.len(), 1);
         assert_eq!(app.data.sessions[0].session_id, A);
@@ -21510,7 +21523,7 @@ states:
         );
         app.stop();
         assert!(!fs::read_to_string(&jobs).unwrap().contains("name: one"));
-        assert!(app.status.starts_with("job one deleted"), "{}", app.status);
+        assert!(app.status.contains("job one deleted"), "{}", app.status);
     }
 
     #[test]
