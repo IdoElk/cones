@@ -1320,7 +1320,7 @@ impl Adapter for CostAdapter {
         if event["type"] != "assistant" || message["model"] == "<synthetic>" {
             return Reading::Ignore;
         }
-        let usage = &message["usage"];
+        let usage = claude_usage(&message["usage"]);
         Reading::Response(Response {
             id: message["id"].as_str(),
             reported_usd: None, // Claude's dollar report is the saved session total.
@@ -1369,6 +1369,38 @@ impl Adapter for CostAdapter {
             gap: None,
         })
     }
+}
+
+/// Claude Code 2.1.278 wrote some replies with every top-level counter at 0 and the counts only
+/// in `usage.iterations`, which add up; those replies read as the iterations' sum.
+fn claude_usage(usage: &Value) -> std::borrow::Cow<'_, Value> {
+    const COUNTERS: [&str; 4] = [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ];
+    let Some(iterations) = usage["iterations"].as_array().filter(|i| !i.is_empty()) else {
+        return std::borrow::Cow::Borrowed(usage);
+    };
+    if !COUNTERS.iter().all(|k| usage[k].as_u64() == Some(0)) {
+        return std::borrow::Cow::Borrowed(usage);
+    }
+    let sum = |at: &dyn Fn(&Value) -> &Value| -> Value {
+        iterations
+            .iter()
+            .map(|i| at(i).as_u64().unwrap_or(0))
+            .sum::<u64>()
+            .into()
+    };
+    let mut summed = usage.clone();
+    for k in COUNTERS {
+        summed[k] = sum(&|i| &i[k]);
+    }
+    for k in ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"] {
+        summed["cache_creation"][k] = sum(&|i| &i["cache_creation"][k]);
+    }
+    std::borrow::Cow::Owned(summed)
 }
 
 /// History hydrates only requested rows and never takes the live fleet's cache mutex.
@@ -1532,6 +1564,7 @@ fn report_with_activity(
         let Some(u) = message.get("usage").filter(|u| u.is_object()) else {
             continue;
         };
+        let u = &*claude_usage(u);
         let model = message["model"].as_str();
         if model == Some("<synthetic>") {
             continue;

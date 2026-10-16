@@ -431,5 +431,34 @@ fn every_registered_harness_inherits_fallback_precedence_coverage_and_cache_refr
         assert!(text.contains(split.0), "{kind}");
         fs::write(&fixture.path, text.replace(split.0, split.1)).unwrap();
         assert_cost(&fixture, &mut reader, true, Some(0.00027), Complete);
+        if kind == HarnessKind::Claude {
+            // Claude Code 2.1.278 zeroed the top-level counters of some replies and wrote
+            // them under `iterations` only.
+            let text = fs::read_to_string(&fixture.path).unwrap();
+            let lines: Vec<String> = text
+                .lines()
+                .map(|line| {
+                    let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+                    let usage = &mut event["message"]["usage"];
+                    if usage.is_object() {
+                        let iteration = usage.clone();
+                        *usage = json!({
+                            "input_tokens":0,"cache_read_input_tokens":0,
+                            "cache_creation_input_tokens":0,"output_tokens":0,
+                            "cache_creation":{"ephemeral_1h_input_tokens":20,"ephemeral_5m_input_tokens":0},
+                            "iterations":[iteration],
+                        });
+                    }
+                    event.to_string()
+                })
+                .collect();
+            fs::write(&fixture.path, lines.join("\n") + "\n").unwrap();
+            assert!(
+                fs::read_to_string(&fixture.path)
+                    .unwrap()
+                    .contains("iterations")
+            );
+            assert_cost(&fixture, &mut reader, true, Some(0.00027), Complete);
+        }
     }
 }
