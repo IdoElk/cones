@@ -31,7 +31,7 @@ const BEAT: Duration = Duration::from_secs(10);
 
 /// `BEAT`, shortened when `CONES_TEST_FAST` is set so a test's late arrival is read without
 /// a ten-second nap. Nothing else sets it.
-fn beat() -> Duration {
+pub fn beat() -> Duration {
     if std::env::var_os("CONES_TEST_FAST").is_some() {
         Duration::from_millis(100)
     } else {

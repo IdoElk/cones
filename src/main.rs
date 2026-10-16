@@ -142,6 +142,16 @@ enum Action {
         /// Keep the prompt out of cones' own launch record, for one that carries a secret.
         #[arg(long)]
         no_prompt_record: bool,
+        /// After printing the id, block until the harness reports the session's turn ended, it
+        /// asks for input, failed, stopped or left, and print `ID<TAB>STATE`. Run it as a
+        /// background task, so its exit wakes you when the worker stops. That is not a
+        /// finished task: read the worker's report.
+        #[arg(long, requires = "prompt")]
+        wait: bool,
+        /// With --wait, give up after this many seconds, fractions allowed, and exit 2. It does
+        /// not limit or stop the session.
+        #[arg(long, value_parser = seconds, requires = "wait")]
+        timeout: Option<std::time::Duration>,
     },
     /// Start jobs whose ticks passed while the Mac was off or logged out. The login agent runs this.
     Catchup {
@@ -550,7 +560,13 @@ fn execute(cli: Cli) -> Result<i32> {
             name,
             print_command,
             no_prompt_record,
+            wait,
+            timeout,
         } => {
+            ensure!(
+                !(wait && print_command),
+                "--print-command starts nothing to wait for"
+            );
             let dir = cones::expand_path(&dir, &cwd)?
                 .canonicalize()
                 .context("launch directory")?;
@@ -629,6 +645,7 @@ fn execute(cli: Cli) -> Result<i32> {
                 println!("{}", shell_command(dir.as_os_str(), &command));
                 return Ok(0);
             }
+            let since = chrono::Utc::now();
             // A detached launch outlives this shell and prints one id for the other
             // commands. Which kind of id that is depends on the harness; see docs/cli.md.
             let started = cones::launch::detached(
@@ -665,6 +682,24 @@ fn execute(cli: Cli) -> Result<i32> {
                     &name,
                 )
                 .with_context(|| format!("{} started but was not named", started.id))?;
+            }
+            if wait {
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                match cones::launch::wait_until_stopped(
+                    &state,
+                    &claude,
+                    &jobs_path,
+                    &started.id,
+                    since,
+                    timeout,
+                )? {
+                    Some(settled) => print!("{settled}"),
+                    None => {
+                        println!("timeout");
+                        return Ok(2);
+                    }
+                }
             }
             Ok(0)
         }

@@ -85,9 +85,10 @@ left in its own conversation does none of these, so tell every worker to send it
 your conversation: a Claude worker under a Claude launcher uses SendMessage to the name
 ListAgents gives you, and any other worker runs
 `cones comms --dir WORKER_FOLDER send YOUR_ID '<report>'`, where YOUR_ID is your
-`$CLAUDE_CODE_SESSION_ID` or `$CODEX_THREAD_ID`, or your row in `cones ls --json`. To also
-hear when a worker needs input, fails or leaves, run
-`cones comms --dir PATH wait --id ID ...` as a background task.
+`$CLAUDE_CODE_SESSION_ID` or `$CODEX_THREAD_ID`, or your row in `cones ls --json`. A worker
+that crashes, stops to ask for input or forgets sends nothing, so also launch it with
+`cones launch --wait ...` as a background task: that command exits when the harness reports
+the worker stopped, and its exit wakes you. Then read the worker's report.
 
 **The report asks for:** the native session id, worktree and branch, the result or the blocker
 with what is missing, changed files, checks run and what they said, and the commit hash.

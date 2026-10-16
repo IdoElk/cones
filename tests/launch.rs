@@ -1063,3 +1063,79 @@ fn a_launch_directory_that_is_not_a_folder_is_refused() {
     }
     assert!(f.recovery().is_empty());
 }
+
+/// `launch --wait` is how a launcher hears that its worker stopped: the command exits when the
+/// harness reports the turn ended, and a caller running it in the background is woken by that
+/// exit. The idle a background session reports before its first turn is not that end.
+#[test]
+fn a_waited_launch_returns_when_the_worker_s_turn_ends_and_not_before() {
+    let f = Fixture::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cones"))
+        .args([
+            "--jobs",
+            f.jobs.to_str().unwrap(),
+            "--state-dir",
+            f.state().to_str().unwrap(),
+            "launch",
+            "--dir",
+            f.work.to_str().unwrap(),
+            "--harness",
+            "claude",
+            "--wait",
+            "--timeout",
+            "30",
+            "port the risk experiment",
+        ])
+        .env("HOME", f.path())
+        .env("CONES_TEST_FAST", "1")
+        .env("CLAUDE_CONFIG_DIR", f.path().join("claude"))
+        .env("PI_CODING_AGENT_DIR", f.path().join("pi"))
+        .env("CODEX_HOME", f.codex_home())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let registry = f.path().join("claude/sessions");
+    let record = || fs::read_dir(&registry).ok()?.next()?.ok().map(|e| e.path());
+    wait_until("the launch registers its session", || record().is_some());
+    let record = record().unwrap();
+    let set = |status: &str| {
+        let mut entry: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        entry["status"] = status.into();
+        fs::write(&record, entry.to_string()).unwrap();
+    };
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the idle reported before the first turn ended the wait"
+    );
+    set("busy");
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "a working session ended the wait"
+    );
+    set("idle");
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = record.file_stem().unwrap().to_str().unwrap().to_owned();
+    assert_eq!(stdout(&out), format!("{id}\n{id}\tidle"));
+
+    // A worker that never takes a turn leaves the wait to its timeout, exit 2.
+    let out = f.cones(
+        "ok",
+        &[
+            "launch",
+            "--dir",
+            f.work.to_str().unwrap(),
+            "--harness",
+            "claude",
+            "--wait",
+            "--timeout",
+            "0.5",
+            "sit idle",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stdout(&out).ends_with("\ntimeout"), "{}", stdout(&out));
+}

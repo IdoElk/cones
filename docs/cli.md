@@ -26,7 +26,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones` | Open the dashboard; requires a terminal. |
 | `cones run JOB [--trigger manual\|schedule]` | Run a configured job. Trigger defaults to `manual`; launchd passes `schedule`. |
 | `cones run --prompt "..." [JOB]` | Run a [one-off task](#one-off-tasks). |
-| `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--name NAME] [--print-command] [--no-prompt-record]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
+| `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--name NAME] [--print-command] [--no-prompt-record] [--wait [--timeout S]]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
 | `cones catchup [--dry-run]` | Recover [missed schedules](jobs.md#sleep-login-and-reboot). `--dry-run` prints `name missed <local time>` for each candidate and starts nothing. |
 | `cones ls [--dir PATH] [--job NAME] [--status S] [--json]` | [Read runs and live sessions](#reading-runs-and-sessions). |
 | `cones search QUERY [--dir PATH] [--harness NAME] [--json]` | [Search conversation history](#searching-conversations), including archived sessions. |
@@ -219,6 +219,15 @@ Claude and Codex launch into their daemons; OpenCode, pi and experimental launch
 persistent hosts. Each prints a discovered identifier on stdout, with its kind on stderr, and
 survives the launching shell, so no terminal is needed. See [detached identities and
 verification limits](harness.md#detached-launch) before using the returned id with other commands.
+
+`--wait` keeps the command running after it prints the id, until the harness reports that the
+session stopped moving on its own: its turn ended, it asks for input, it failed or stopped, or
+it left the roster. It then prints `ID<TAB>STATE`. A state reported before the first turn does
+not count; the session must have been seen working or have written since the launch. An agent
+runs it as a background task, so the command's exit wakes it. The state says where to look,
+not that the task is done. `--timeout S` gives up after S seconds and exits 2 with `timeout`,
+leaving the session running. A pi session watched by its process id, before its session file
+names it, can read as `gone`.
 
 An unnamed launch exits nonzero without printing an id or stopping the started session. A
 hosted client that exits during its launch also exits nonzero with no id, and the error quotes
