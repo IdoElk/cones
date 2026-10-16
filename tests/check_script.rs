@@ -412,8 +412,8 @@ fn installing_head_builds_a_detached_worktree_in_the_background_and_removes_it()
         r#"
 printf '%s\n' "$@" > "$TMPDIR/args"
 python3 -c 'import os; print("priority", os.getpriority(4, 0))' >> "$TMPDIR/args"
-test -f "$3/Cargo.toml" && printf 'package\n' >> "$TMPDIR/args"
-git -C "$3" rev-parse HEAD >> "$TMPDIR/args"
+test -f "$4/Cargo.toml" && printf 'package\n' >> "$TMPDIR/args"
+git -C "$4" rev-parse HEAD >> "$TMPDIR/args"
 "#,
     );
     let root = fixture.dir.path().join("prefix");
@@ -439,7 +439,7 @@ git -C "$3" rev-parse HEAD >> "$TMPDIR/args"
     assert_eq!(
         recorded,
         format!(
-            "install\n--path\n{}\n--force\n--root\n{}\n--target-dir\n{}\npriority 1\npackage\n{head}",
+            "install\n--locked\n--path\n{}\n--force\n--root\n{}\n--target-dir\n{}\npriority 1\npackage\n{head}",
             worktree.display(),
             root.display(),
             state.join("install-target").display(),
