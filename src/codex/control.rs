@@ -1,9 +1,10 @@
-//! End or name one thread over the already-running local Codex app-server.
+//! End or name one thread over the already-running local Codex app-server, or trust a folder.
 //!
 //! Codex has no stop or rename subcommand. Its app-server protocol interrupts a turn by id,
 //! closes the terminals a thread left running, and names a thread the way its own `/rename`
-//! does, loaded or not; all of these keep the conversation. Nothing here starts a daemon,
-//! resumes or subscribes to a thread, or answers a request the daemon sends.
+//! does, loaded or not; all of these keep the conversation. It also saves a folder's trust the
+//! way the client's own "Trust and continue" does. Nothing here starts a daemon, resumes or
+//! subscribes to a thread, or answers a request the daemon sends.
 use super::runtime::{connect, remaining, send};
 use serde_json::{Value, json};
 use std::{
@@ -100,6 +101,28 @@ fn client(home: &Path, name: &str) -> io::Result<Client> {
 pub fn rename(home: &Path, thread: &str, name: &str) -> io::Result<()> {
     client(home, "cones_rename")?
         .call("thread/name/set", json!({"threadId": thread, "name": name}))
+        .map(drop)
+}
+
+/// Save `dir` as trusted in the daemon's own config, as the client's trust question does when
+/// answered, so a client cones starts there does not stop on that question. A folder the
+/// config already names, trusted or not, keeps its setting.
+pub fn trust(home: &Path, dir: &Path) -> io::Result<()> {
+    let mut client = client(home, "cones_trust")?;
+    let dir = dir.to_string_lossy();
+    let config = client.call("config/read", json!({}))?;
+    if !config["config"]["projects"][dir.as_ref()].is_null() {
+        return Ok(());
+    }
+    client
+        .call(
+            "config/batchWrite",
+            json!({"edits": [{
+                "keyPath": "projects",
+                "mergeStrategy": "upsert",
+                "value": {dir.as_ref(): {"trust_level": "trusted"}},
+            }]}),
+        )
         .map(drop)
 }
 

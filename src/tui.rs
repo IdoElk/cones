@@ -3294,6 +3294,17 @@ fn merge_hosts(rows: &mut Vec<Session>, hosts: &[terminal_host::Record]) {
                     row.forked_from_harness = host.session.forked_from_harness.clone();
                 }
             }
+        } else if host.session.harness == "codex"
+            && rows.iter().any(|s| {
+                s.harness == "codex"
+                    && s.kind.as_deref() == Some("daemon")
+                    && s.cwd == host.session.cwd
+                    && s.started >= host.session.started
+            })
+        {
+            // A hosted Codex client is a remote viewer, and discovery already gave the
+            // daemon thread it opened its row. A launch that gave up naming that thread, as
+            // one left on a trust screen does, leaves only this record of the client.
         } else {
             let mut row = host.session.clone();
             // The host records process ownership, not agent activity. Only the

@@ -561,6 +561,17 @@ fn two_codex_threads_for_one_prompt_are_refused_rather_than_chosen_between() {
     let recovery = f.recovery();
     assert_eq!(recovery[1]["event"], "launch.unnamed");
     assert!(recovery[1]["data"]["session_id"].is_null());
+    // The client is a viewer of those threads, so the folder lists the threads and not it.
+    let mut listed: Vec<String> = f
+        .rows()
+        .iter()
+        .filter(|r| r["session"]["harness"] == "codex")
+        .map(|r| r["session"]["session_id"].as_str().unwrap().to_owned())
+        .collect();
+    listed.sort();
+    let mut threads = f.codex_threads();
+    threads.sort();
+    assert_eq!(listed, threads);
 }
 
 /// Codex reports nothing that ties a thread to the launch that asked for it, so two launches
@@ -615,6 +626,78 @@ fn a_codex_launch_overlapping_another_of_the_same_prompt_is_refused_and_a_later_
         f.recovery().last().unwrap()["data"]["session_id"],
         threads[2].as_str()
     );
+}
+
+/// A detached client has no screen to answer Codex's trust question on, so cones saves the
+/// folder's trust in the daemon's config first, as answering the question would.
+#[test]
+fn a_codex_launch_trusts_a_new_folder_through_the_daemon_and_keeps_a_named_one() {
+    use tungstenite::Message;
+    let f = Fixture::codex();
+    let control = f.codex_home().join("app-server-control");
+    fs::create_dir_all(&control).unwrap();
+    let listener =
+        std::os::unix::net::UnixListener::bind(control.join("app-server-control.sock")).unwrap();
+    let (home, writes) = (
+        f.codex_home(),
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    );
+    let seen = writes.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut socket = tungstenite::accept(stream.unwrap()).unwrap();
+            while let Ok(Message::Text(text)) = socket.read() {
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let trusted = home.join("trusted");
+                let result = match request["method"].as_str().unwrap() {
+                    "initialized" => continue,
+                    "initialize" => serde_json::json!({}),
+                    "config/read" => {
+                        let projects: serde_json::Map<String, Value> = fs::read_to_string(&trusted)
+                            .unwrap_or_default()
+                            .lines()
+                            .map(|d| (d.to_owned(), serde_json::json!({"trust_level": "trusted"})))
+                            .collect();
+                        serde_json::json!({"config": {"projects": projects}, "origins": {}})
+                    }
+                    "config/batchWrite" => {
+                        let edit = request["params"]["edits"][0].clone();
+                        seen.lock().unwrap().push(edit.clone());
+                        let mut names = fs::read_to_string(&trusted).unwrap_or_default();
+                        for (dir, project) in edit["value"].as_object().unwrap() {
+                            assert_eq!(project["trust_level"], "trusted");
+                            names.push_str(&format!("{dir}\n"));
+                        }
+                        fs::write(&trusted, names).unwrap();
+                        serde_json::json!({"status": "ok", "version": "1", "filePath": "config.toml"})
+                    }
+                    other => panic!("cones sent the daemon {other}"),
+                };
+                let reply = serde_json::json!({"id": request["id"], "result": result});
+                socket
+                    .send(Message::Text(reply.to_string().into()))
+                    .unwrap();
+            }
+        }
+    });
+
+    let out = f.launch("trust", "codex", "review the plan");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(f.codex_threads(), [stdout(&out)]);
+    let folder = f.work.to_str().unwrap();
+    assert_eq!(
+        *writes.lock().unwrap(),
+        [serde_json::json!({
+            "keyPath": "projects", "mergeStrategy": "upsert",
+            "value": {folder: {"trust_level": "trusted"}},
+        })]
+    );
+
+    // A folder the config already names keeps its setting: nothing more is written.
+    let out = f.launch("trust", "codex", "review it again");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(f.codex_threads().len(), 2);
+    assert_eq!(writes.lock().unwrap().len(), 1);
 }
 
 /// Codex keeps nothing for a client that has not taken a turn, so the only id such a launch

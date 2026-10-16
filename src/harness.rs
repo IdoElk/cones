@@ -111,8 +111,11 @@ pub fn start(
             Start::Background(c)
         }
         spec::LaunchHandler::CodexRemote => {
-            let (path, remote) =
-                codex_remote(&path, &crate::codex::home(&crate::fleet::claude_dir()?))?;
+            let home = crate::codex::home(&crate::fleet::claude_dir()?);
+            let (path, remote) = codex_remote(&path, &home)?;
+            // A detached launch has no screen to answer Codex's trust question on. A daemon
+            // that refuses the write leaves the question to the client, as before.
+            let _ = crate::codex::control::trust(&home, dir);
             let mut c = std::process::Command::new(path);
             c.args(&named)
                 .args(session_args(kind, Some((&remote, dir)), prompt, policy)?)

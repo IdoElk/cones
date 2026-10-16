@@ -375,8 +375,13 @@ exports. Only native settings reach both. Scheduled jobs keep their
 | pi | `pi -- <instruction>`. | Child PID/harness/folder; the session file names its conversation. |
 | OpenCode | `opencode --prompt=<instruction>`. | Child PID/harness/folder; the owned reporter names its conversation. |
 
-Folder trust stays the harness's decision. Foreground clients such as Codex show their own trust
-question in the pane before the instruction runs; cones never writes a trust setting.
+Before a Codex client starts, cones saves the folder as trusted through the daemon's
+`config/batchWrite`, the write Codex's own "Trust and continue" makes, so a client with no
+screen does not stop on that question. A folder Codex's config already names, trusted or
+untrusted, keeps its setting, and a daemon that refuses the write leaves the question to the
+client. Codex 0.163.0 asks a remote client's trust question from the daemon's config, so a
+`-c projects...` override on the client does not answer it. Other foreground clients show
+their own trust question in the pane before the instruction runs.
 
 A harness whose launch identity is `client_pid` keys its row by the process, `<harness>-<pid>`,
 for every client, whoever started it. The conversation it reports is an attribute of that row:
@@ -412,8 +417,8 @@ Two that match are refused, and so is one that matches while another launch of t
 into that folder, submitted within the last 20 seconds, is still unnamed in the launch ledger;
 overlapping identical launches therefore all fail unnamed and keep running. The same prompt
 typed into Codex by anything that writes no ledger line is not told apart. Claude and Codex
-naming wait up to 20 seconds; a Codex client stuck on a trust or sign-in screen reports no
-thread and stays hosted.
+naming wait up to 20 seconds; a Codex client stuck on a sign-in screen reports no thread and
+stays hosted. Once its thread appears, the thread is the folder's row and the client gets none.
 Hosted launches wait up to five seconds for discovery,
 then up to 20 for a stored host identity if needed. An unnamed launch fails without stopping
 the session. Input waits remain native and require user action.

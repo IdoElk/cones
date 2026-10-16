@@ -11,6 +11,7 @@ Installed under a fixture HOME as `.local/bin/claude`, `.local/bin/pi`, `.local/
   no-id    start, print an unusable line instead of a background id
   fail     refuse to start, with a diagnostic on stderr
   twice    codex only: report two threads for the one prompt
+  trust    codex only: ask to trust the folder, and wait, until `trusted` in the home names it
   login    pi only: ask a sign-in question, then exit shortly after
   stuck    pi only: ask the same question and wait on it
 """
@@ -107,6 +108,14 @@ if name == "codex":
     # on the first turn and tells the launcher nothing, so the rollout is all cones can read.
     cwd = args[args.index("-C") + 1]
     prompt = args[args.index("--") + 1] if "--" in args else None
+    if mode == "trust":
+        # Codex's own question, which the client answers from the daemon's config.
+        trusted = home / "trusted"
+        if not (trusted.exists() and cwd in trusted.read_text().splitlines()):
+            print("Trust this folder?", flush=True)
+            signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+            while True:
+                time.sleep(0.05)
     made = []
     for _ in range(2 if mode == "twice" else 1 if prompt else 0):
         thread = str(uuid.uuid4())
