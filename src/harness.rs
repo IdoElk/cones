@@ -104,6 +104,10 @@ pub fn start(
     };
     let mut start = match launch.handler {
         spec::LaunchHandler::ClaudeBackground => {
+            // `--bg` refuses a folder Claude has not trusted, having no screen to ask on. A
+            // config cones cannot write leaves that refusal, which the dashboard answers by
+            // asking in the pane.
+            let _ = trust_claude(&crate::fleet::claude_dir()?, dir);
             let mut c = std::process::Command::new(path);
             c.args(&named)
                 .args(session_args(kind, None, prompt, policy)?)
@@ -152,6 +156,50 @@ pub fn start(
         return Ok(Start::Foreground(stdin_prompt(command, prompt)?));
     }
     Ok(start)
+}
+
+/// Accept Claude's trust dialog for `dir` the way answering it does: its `projects` entry in
+/// Claude's `.claude.json` gets `hasTrustDialogAccepted`. Only that folder's entry changes, and
+/// nothing is written when the folder or a folder above it is already trusted, or when there is
+/// no config to add to. The file is replaced whole, so a Claude saving its own copy at the same
+/// moment can drop the entry; that launch then meets the trust question as before.
+pub fn trust_claude(claude: &Path, dir: &Path) -> Result<()> {
+    let file =
+        if std::env::var_os(&spec(HarnessKind::Claude).home.env).is_some_and(|d| !d.is_empty()) {
+            claude.join(".claude.json")
+        } else {
+            claude.with_file_name(".claude.json")
+        };
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    let dir = dir.canonicalize()?;
+    let projects = config["projects"].as_object();
+    if dir.ancestors().any(|d| {
+        projects
+            .and_then(|p| p.get(d.to_str()?))
+            .is_some_and(|p| p["hasTrustDialogAccepted"] == true)
+    }) {
+        return Ok(());
+    }
+    let key = dir.to_str().context("folder path is not UTF-8")?;
+    let projects = config
+        .as_object_mut()
+        .context("Claude's config is not an object")?
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}));
+    let entry = projects
+        .as_object_mut()
+        .context("Claude's projects are not an object")?
+        .entry(key)
+        .or_insert_with(|| serde_json::json!({}));
+    entry
+        .as_object_mut()
+        .context("Claude's project entry is not an object")?
+        .insert("hasTrustDialogAccepted".into(), true.into());
+    let pending = file.with_extension(format!("json.cones-{}", std::process::id()));
+    std::fs::write(&pending, serde_json::to_vec_pretty(&config)?)?;
+    std::fs::set_permissions(&pending, std::fs::metadata(&file)?.permissions())?;
+    std::fs::rename(&pending, &file)?;
+    Ok(())
 }
 
 /// What Claude prints when `--bg` meets a folder the owner has not trusted yet. A background

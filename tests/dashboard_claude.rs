@@ -987,7 +987,7 @@ fn a_launch_refused_for_an_untrusted_folder_asks_claude_trust_question_in_the_pa
         "the launch row stays listed while Claude asks:\n{screen}"
     );
 
-    // Claude's own question is answered in its own client; cones grants nothing.
+    // With no Claude config to add the folder to, Claude's own client answers its question.
     assert!(!d.home().join("trusted").exists());
     d.press("enter", b"\r");
     d.press("enter", b"\r");
@@ -1872,4 +1872,54 @@ fn left_unfolds_every_detail_of_a_session_under_its_row_and_folds_it_again() {
         s.daemon.kill().unwrap();
         s.daemon.wait().unwrap();
     }
+}
+
+#[test]
+fn a_launch_into_an_untrusted_folder_trusts_that_folder_alone_and_starts_in_the_background() {
+    let mut d = Dashboard::new("claude-trusts", &["claude"]);
+    d.install("claude", "fake_claude_fleet.py");
+    let project = real_project(&d);
+    let config = d.home().join(".claude/.claude.json");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let before = serde_json::json!({
+        "numStartups": 3,
+        "projects": {
+            "/elsewhere": {"hasTrustDialogAccepted": false, "allowedTools": []},
+            project.to_str().unwrap(): {"lastCost": 0.5},
+        },
+    });
+    fs::write(&config, before.to_string()).unwrap();
+    fs::write(d.home().join("fake-launch"), "untrusted").unwrap();
+    d.start();
+    d.wait_text("✻ claude › ");
+    d.typed("count the flaky tests");
+    d.press("enter", b"\r");
+    let screen = d.wait_file("state/tui-debug.log", |t| {
+        records(t).iter().any(|r| r["event"] == "launch.applied")
+    });
+    let applied = records(&screen)
+        .into_iter()
+        .find(|r| r["event"] == "launch.applied")
+        .unwrap();
+    assert_eq!(
+        applied["data"]["outcome"], "awaiting_discovery",
+        "{applied}"
+    );
+
+    // Only the launched folder's entry gained the accepted dialog; everything else is as it was.
+    let after: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let mut expected = before;
+    expected["projects"][project.to_str().unwrap()]["hasTrustDialogAccepted"] = true.into();
+    assert_eq!(after, expected);
+    let launches: Vec<_> = calls(&d)
+        .into_iter()
+        .filter(|c| c.last().map(String::as_str) == Some("count the flaky tests"))
+        .collect();
+    assert_eq!(launches.len(), 1, "{launches:?}");
+    assert_eq!(launches[0][0], "--bg", "{launches:?}");
+    assert!(
+        !d.home().join("trusted").exists(),
+        "Claude's own question was asked"
+    );
+    d.quit();
 }

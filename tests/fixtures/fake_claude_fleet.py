@@ -6,7 +6,8 @@ commands the dashboard ran, and its environment to `$HOME/claude-env.jsonl`. `$H
   ok    hand the session to a stand-in daemon (`/bin/sleep`), list it in the registry with a
         transcript and an AI title, and print the background id the way Claude does
   fail  refuse to start, with a diagnostic on stderr
-  untrusted  refuse `--bg` with Claude's own trust error until `$HOME/trusted` exists; a
+  untrusted  refuse `--bg` with Claude's own trust error until `$HOME/trusted` exists or
+        `$CLAUDE_CONFIG_DIR/.claude.json` accepts the folder's trust dialog; a
         foreground start asks Claude's trust question on the pty, and enter trusts the folder,
         lists the session in the registry under the fixture's pid and holds the pty
 `$HOME/registry-delay` holds a `--bg` session's registry entry back that many seconds, the
@@ -115,7 +116,13 @@ if mode == "fail":
 
 prompt = args[args.index("--") + 1] if "--" in args else ""
 trusted = HOME / "trusted"
-if mode == "untrusted" and "--bg" in args and not trusted.exists():
+def accepted():
+    try:
+        projects = json.loads((CLAUDE / ".claude.json").read_text()).get("projects", {})
+    except FileNotFoundError:
+        return False
+    return projects.get(os.getcwd(), {}).get("hasTrustDialogAccepted") is True
+if mode == "untrusted" and "--bg" in args and not (trusted.exists() or accepted()):
     print(f"Workspace not trusted. Run `claude` in {os.getcwd()} once and accept the trust "
           "prompt, then retry.", file=sys.stderr)
     sys.exit(1)

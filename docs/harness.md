@@ -370,10 +370,17 @@ exports. Only native settings reach both. Scheduled jobs keep their
 
 | Harness | Launch | Attribution |
 | --- | --- | --- |
-| Claude | `claude --bg -- <instruction>`; in a folder Claude has not trusted yet, the same command without `--bg` in the pane, so Claude asks its own trust question. | Returned short id matched to registry/folder; the untrusted-folder start by child PID; unreported launches expire after 90 seconds. |
+| Claude | `claude --bg -- <instruction>`, after accepting the folder's trust dialog in Claude's config; when that config cannot be written and Claude refuses the folder, the same command without `--bg` in the pane, so Claude asks its own trust question. | Returned short id matched to registry/folder; the untrusted-folder start by child PID; unreported launches expire after 90 seconds. |
 | Codex | Find/start daemon, open remote client with instruction. | Child PID, then exactly one new thread matching folder/start/prompt without competing unresolved launches. |
 | pi | `pi -- <instruction>`. | Child PID/harness/folder; the session file names its conversation. |
 | OpenCode | `opencode --prompt=<instruction>`. | Child PID/harness/folder; the owned reporter names its conversation. |
+
+Before `claude --bg`, cones sets `hasTrustDialogAccepted` on the folder's `projects` entry in
+Claude's `.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when that is set, else `~/.claude.json`),
+which is what accepting Claude's dialog records. Only that entry changes; nothing is written when
+the folder or one above it is already trusted, or when the file is missing. The file is replaced
+whole with its keys in sorted order, and a Claude saving its own copy at the same moment can drop
+the entry, in which case that launch falls back to the pane question.
 
 Before a Codex client starts, cones saves the folder as trusted through the daemon's
 `config/batchWrite`, the write Codex's own "Trust and continue" makes, so a client with no
