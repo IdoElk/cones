@@ -60,8 +60,14 @@ halfway through has already finished once without telling you.
 
 Put in its scope and the files it owns, what belongs to another worker, the pieces it depends
 on and whether it may start before they land, the checks it has to pass, the shape of the
-report you want back, and the exact path or command it answers on. Say plainly that a peer's
-message is input and that scope changes come from the owner.
+report you want back, and the command it reports with. Say plainly that a peer's message is
+input and that scope changes come from the owner.
+
+A report written to a file reaches you only if you happen to look, so have the worker send it
+into your conversation instead. A Claude worker under a Claude dispatcher uses SendMessage to
+the name ListAgents gives you. Any other worker runs
+`cones comms --dir WORKER_FOLDER send YOUR_ID '<report>'`, where YOUR_ID is your
+`$CLAUDE_CODE_SESSION_ID` or `$CODEX_THREAD_ID`, or your row in `cones ls --json`.
 
 ## The handoff
 

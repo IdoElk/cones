@@ -363,8 +363,8 @@ fn rename_refuses_a_terminal_only_harness() {
 
 /// A note from a session cones can place says to answer with `send` back into that session's
 /// conversation, so the answer arrives as a prompt rather than as a file its sender has to
-/// remember to read. The sender may work outside the folder: once it has sent through the
-/// folder its exact id is a recipient there, and before that it is refused like any stranger.
+/// remember to read. The sender, or a launcher a worker reports to, may work outside the folder:
+/// its exact id reaches it, while a prefix only names a session on the folder's roster.
 #[test]
 fn a_reply_goes_back_into_the_senders_conversation() {
     use sha2::Digest;
@@ -394,13 +394,10 @@ fn a_reply_goes_back_into_the_senders_conversation() {
     )
     .unwrap();
 
-    let out = f.send("peer-claude", "hello");
+    let out = f.send("peer-cla", "hello");
+    assert!(!out.status.success(), "a prefix reached outside the folder");
     assert!(
-        !out.status.success(),
-        "a stranger outside the folder was written to"
-    );
-    assert!(
-        stderr(&out).contains("no live session peer-claude in "),
+        stderr(&out).contains("no live session peer-cla in "),
         "{}",
         stderr(&out)
     );
@@ -427,8 +424,8 @@ fn a_reply_goes_back_into_the_senders_conversation() {
         )
     );
 
-    // The answer now reaches the sender through its own harness's delivery. This registry
-    // record publishes no cross-session inbox, so the refusal is Claude's, not the roster's.
+    // The answer reaches the sender through its own harness's delivery. This registry record
+    // publishes no cross-session inbox, so the refusal is Claude's, not the roster's.
     let out = f.send("peer-claude", "done");
     assert!(!out.status.success(), "{}", stderr(&out));
     assert!(

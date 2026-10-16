@@ -602,16 +602,16 @@ fn resolve<'a>(folder: &Path, known: &[&'a str], id: &str) -> Result<&'a str> {
     }
 }
 
-/// One note to a live worker in this folder, delivered by that worker's own harness.
+/// One note to a live session, delivered by that session's own harness.
 ///
 /// The sender has no authority the owner did not give it, so the note says who it is from and how
 /// to answer. A sender cones can place is answered with `send` back into its own conversation,
 /// which wakes it like any prompt; the folder's inbox is only the way back when that is not
 /// possible, because a file is read only by an agent that remembers to look. The recipient may be
-/// the sender of an earlier note working outside this folder, so the exact id of a session that
-/// sent through this folder is also looked up across the whole fleet. Any other session outside
-/// the folder is still not this folder's to write to. A harness with no delivery of its own is
-/// refused rather than approximated: typing into somebody's terminal is not a message.
+/// a sender or a launcher working outside this folder, so an exact id is looked up across the
+/// whole fleet; a prefix only names a session on the folder's roster. A harness with no delivery
+/// of its own is refused rather than approximated: typing into somebody's terminal is not a
+/// message.
 pub fn send(folder: &Folder, id: &str, text: &str, greet: bool) -> Result<String> {
     let fleet_rows = folder.fleet()?;
     let roster: Vec<&Session> = fleet_rows
@@ -620,12 +620,7 @@ pub fn send(folder: &Folder, id: &str, text: &str, greet: bool) -> Result<String
         .collect();
     let known: Vec<&str> = roster.iter().map(|s| s.session_id.as_str()).collect();
     let dir = folder.dir();
-    let senders_path = dir.join("senders.json");
-    let mut senders: Vec<String> = read_json(&senders_path).unwrap_or_default();
-    let outside = fleet_rows
-        .iter()
-        .find(|s| s.session_id == id && senders.iter().any(|k| k == id));
-    let row = match outside {
+    let row = match fleet_rows.iter().find(|s| s.session_id == id) {
         Some(row) => row,
         None => {
             let id = resolve(&folder.path, &known, id)?;
@@ -671,10 +666,6 @@ pub fn send(folder: &Folder, id: &str, text: &str, greet: bool) -> Result<String
     let note = format!("[{}] {text}\n{reply}", sender(folder, &fleet_rows, greet));
     let home = crate::harness::home_of(row, &folder.claude);
     crate::harness::message(row, &home, &folder.state, &note)?;
-    if let Some(me) = me.filter(|me| !senders.contains(&me.session_id)) {
-        senders.push(me.session_id.clone());
-        write_atomically(&senders_path, &serde_json::to_string(&senders)?)?;
-    }
     if greet {
         greeted.push(id.to_owned());
         write_atomically(&greeted_path, &serde_json::to_string(&greeted)?)?;
