@@ -53,6 +53,8 @@ pub struct Dashboard {
     keys: String,
     /// The binary `start` runs; `cones` under test unless a test places a copy elsewhere.
     pub exe: PathBuf,
+    /// Start with `--trace`, which logs every timing sample.
+    pub trace: bool,
 }
 
 impl Dashboard {
@@ -95,6 +97,7 @@ impl Dashboard {
             shots: 0,
             keys: String::new(),
             exe: PathBuf::from(env!("CARGO_BIN_EXE_cones")),
+            trace: false,
         }
     }
 
@@ -158,7 +161,7 @@ impl Dashboard {
         let slave = unsafe { OwnedFd::from_raw_fd(slave) };
         let mut command = Command::new(&self.exe);
         command
-            .arg("--debug")
+            .arg(if self.trace { "--trace" } else { "--debug" })
             .current_dir(self.project())
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap()))

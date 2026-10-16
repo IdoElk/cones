@@ -1649,27 +1649,30 @@ fn arrows_walk_the_rows_of_a_wrapped_draft_before_they_reach_the_list() {
     d.quit();
 }
 
-/// The input-to-draw measurements and the mean viewer pump in every timing summary of the
-/// debug log: how many frames followed input, and what a pump cost.
+/// How many frames followed input, from the debug log's timing summaries, and the median
+/// viewer pump in milliseconds, from its traced samples.
 fn input_frames_and_pump_ms(log: &str) -> (u64, f64) {
-    let (mut frames, mut pumps, mut pump_ms) = (0, 0, 0.0);
+    let (mut frames, mut pumps) = (0, Vec::new());
     for record in records(log) {
-        if record["event"] != "timing.summary" {
-            continue;
+        let data = &record["data"];
+        if record["event"] == "timing.summary" {
+            frames += data["phases"]["input_to_draw"]["count"]
+                .as_u64()
+                .unwrap_or(0);
+        } else if record["event"] == "timing" && data["phase"] == "viewer_pump" {
+            pumps.push(data["duration_ms"].as_f64().unwrap());
         }
-        let phases = &record["data"]["phases"];
-        frames += phases["input_to_draw"]["count"].as_u64().unwrap_or(0);
-        let count = phases["viewer_pump"]["count"].as_u64().unwrap_or(0);
-        pumps += count;
-        pump_ms += phases["viewer_pump"]["mean_ms"].as_f64().unwrap_or(0.0) * count as f64;
     }
-    (frames, pump_ms / pumps.max(1) as f64)
+    assert!(!pumps.is_empty(), "no viewer pump was traced");
+    pumps.sort_by(f64::total_cmp);
+    (frames, pumps[pumps.len() / 2])
 }
 
 #[test]
 fn a_wheel_flood_reaches_the_pane_whole_in_a_few_frames() {
     const REPORTS: usize = 600;
     let mut d = Dashboard::new("claude-wheel-flood", &["claude"]);
+    d.trace = true;
     d.install("claude", "fake_claude_fleet.py");
     fs::write(d.home().join("fake-attach-fullscreen"), "").unwrap();
     fs::write(d.home().join("fake-attach-mouse"), "").unwrap();
@@ -1719,10 +1722,9 @@ fn a_wheel_flood_reaches_the_pane_whole_in_a_few_frames() {
         "{frames} frames followed input"
     );
     // An idle viewer's pump returns at once instead of waiting for output that never comes.
-    assert!(
-        pump_ms < 0.5,
-        "a viewer pump took {pump_ms:.2}ms on average"
-    );
+    // A pump that waits sleeps at least PUMP_WAIT, 1ms, so the median is clear of runner
+    // noise that moves a mean.
+    assert!(pump_ms < 1.0, "the median viewer pump took {pump_ms:.2}ms");
     for mut s in seeded {
         s.daemon.kill().unwrap();
         s.daemon.wait().unwrap();
