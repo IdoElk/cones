@@ -39,7 +39,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones comms [--dir PATH] send\|mail\|wait ...` | [Write to the agents in a folder, read their replies and wait for one](#comms). |
 | `cones config [--check]` | Print the `jobs.yaml` path, editing notes and the full [configuration reference](jobs.md), for you or an agent to edit the file directly. `--check` validates the file. |
 | `cones config set KEY VALUE`, `cones config unset KEY` | Set one [setting](jobs.md) by dotted path, such as `columns`, `highlight` or `defaults.model`, or remove it to restore the built-in. VALUE is YAML, so a list is `'[state, bypass, model]'`. Only that top-level block is rewritten; a value the file would refuse leaves it unchanged. Jobs are not settable here. |
-| `cones skill [NAME]` | Print a [bundled skill](#dispatching-your-own-workers) for a session that is already running; no name lists them. |
+| `cones skill [NAME]` | Print a [bundled skill](#bundled-skills) for a session that is already running; no name lists them. |
 
 ### Reading runs and sessions
 
@@ -365,11 +365,11 @@ the inbox. [The wake loop](architecture.md#the-wake-loop) explains baseline and 
 `inbox.ack`, `wait.json`, `greeted.json`, `watcher.json` and `folder.lock`. State survives the
 requesting session. Codex delivery requires the recipient home's daemon with `queue --thread`.
 
-## Dispatching your own workers
+## Bundled skills
 
 ```sh
 cones skill
-cones skill dispatch
+cones skill cones
 ```
 
 Without a name, `skill` lists bundled skills; with one, it prints the embedded `SKILL.md`.
@@ -378,16 +378,15 @@ not load it into existing sessions; `coordinator start` loads it only into the s
 The skills contain prose and no helpers.
 
 The [cones skill](../assets/coordinator/skills/cones/SKILL.md) tells any agent what cones can do for it,
-where to find the commands and how to change settings. The dashboard installs it on start into
+where to find the commands, how to run its own workers on a task it holds and how to change
+settings. Workers it launches report into its conversation, because nothing else wakes it. The dashboard installs it on start into
 `skills/cones/SKILL.md` under the Claude Code home and `~/.agents/skills`, which Codex, pi and
 OpenCode read. `STATE_DIR/skill/cones/SKILL.md` records the installed text: a copy still equal
 to it follows upgrades, while one edited or deleted afterwards, or present before the first
 install, is left alone.
 
-The [dispatch skill](../assets/coordinator/skills/dispatch/SKILL.md) covers launching owned
-workers, collecting results, checking integration and stopping them. Decomposition remains
-with the dispatcher. It may claim an unowned task folder; an existing coordinator requires
-cooperation or a separate folder. Dispatch grants no authority over unrelated sessions.
+The [start-coordinator skill](../assets/coordinator/skills/start-coordinator/SKILL.md) runs a
+folder's coordinator; `coordinator start` loads it.
 
 ## Diagnostics
 

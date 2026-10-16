@@ -1285,7 +1285,7 @@ pub fn launch_path() -> String {
 /// Embedded coordinator plugin, loaded only for the session that starts it. The skill is prose
 /// and nothing else: the plumbing it used to ship as shell and Python is `cones coordinator`.
 pub const COORDINATOR_SKILL: &str = "start-coordinator";
-const COORDINATOR_FILES: [(&str, &str); 4] = [
+const COORDINATOR_FILES: [(&str, &str); 3] = [
     (
         ".claude-plugin/plugin.json",
         include_str!("../assets/coordinator/.claude-plugin/plugin.json"),
@@ -1295,10 +1295,6 @@ const COORDINATOR_FILES: [(&str, &str); 4] = [
         include_str!("../assets/coordinator/skills/start-coordinator/SKILL.md"),
     ),
     (
-        "skills/dispatch/SKILL.md",
-        include_str!("../assets/coordinator/skills/dispatch/SKILL.md"),
-    ),
-    (
         "skills/cones/SKILL.md",
         include_str!("../assets/coordinator/skills/cones/SKILL.md"),
     ),
@@ -1306,7 +1302,7 @@ const COORDINATOR_FILES: [(&str, &str); 4] = [
 
 /// The bundled skills by name, in the order the plugin lists them. Nothing loads a skill into a
 /// session that is already running, so an agent already holding a task reads the prose from
-/// stdout instead: `cones skill dispatch`.
+/// stdout instead: `cones skill cones`.
 pub fn skills() -> impl Iterator<Item = (&'static str, &'static str)> {
     COORDINATOR_FILES.into_iter().filter_map(|(rel, text)| {
         Some((

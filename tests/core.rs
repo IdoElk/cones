@@ -1314,7 +1314,6 @@ fn coordinator_plugin_is_prose_and_nothing_else() {
         [
             ".claude-plugin/plugin.json",
             "skills/cones/SKILL.md",
-            "skills/dispatch/SKILL.md",
             "skills/start-coordinator/SKILL.md"
         ]
     );
@@ -1336,27 +1335,44 @@ fn a_running_agent_reads_a_bundled_skill_without_starting_a_coordinator() {
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "start-coordinator\ndispatch\ncones\n"
+        "start-coordinator\ncones\n"
     );
 
-    let out = cones(&["skill", "dispatch"]);
+    let out = cones(&["skill", "cones"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.starts_with("---\nname: dispatch\n"), "{text}");
+    assert!(text.starts_with("---\nname: cones\n"), "{text}");
     // Printing is loading, because the skill is prose and ships no helper to substitute a path
     // into. Nothing hands a skill to a session that is already running.
     assert!(!text.contains("__CONES_"));
-    // The commands the skill tells a dispatcher to run. Pinned so a stream landing a different
+    // The commands the skill tells an agent to run. Pinned so a stream landing a different
     // spelling than the walkthrough was written against shows up as a failure, not as prose
     // naming a command the binary does not have.
     let mut verbs: Vec<&str> = text
         .split("`cones ")
         .skip(1)
         .filter_map(|rest| rest.split([' ', '`']).next())
+        .filter(|verb| !verb.starts_with('-'))
         .collect();
     verbs.sort_unstable();
     verbs.dedup();
-    assert_eq!(verbs, ["comms", "launch", "ls", "show", "stop"]);
+    assert_eq!(
+        verbs,
+        [
+            "__install",
+            "comms",
+            "config",
+            "coordinator",
+            "help",
+            "launch",
+            "ls",
+            "rename",
+            "rm",
+            "search",
+            "show",
+            "stop"
+        ]
+    );
 
     let out = cones(&["skill", "orchestrate"]);
     assert_eq!(out.status.code(), Some(1));

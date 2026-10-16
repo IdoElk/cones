@@ -27,10 +27,12 @@ harnesses' own records, so you can use it to reach beyond your own session.
    runs detached, needs no terminal and prints the id on stdout; give it the whole task as
    the prompt. Never start a harness's own CLI instead, such as `codex exec` or `claude -p`:
    the owner cannot open that session from the dashboard. If launch fails, report the error.
-4. **Hand off coordination.** For a task you hold, run your own workers with the dispatch
-   skill: `cones skill dispatch`. For a folder whose agents came from elsewhere, start its
-   coordinator: `cones coordinator --dir PATH start`, which runs the `start-coordinator` skill in
-   a background Claude session.
+   A launched session never tells you it finished on its own; see
+   [Running your own workers](#running-your-own-workers).
+4. **Hand off coordination.** For a task you hold, run your own workers as described below.
+   For a folder whose agents came from elsewhere, start its coordinator:
+   `cones coordinator --dir PATH start`, which runs the `start-coordinator` skill in a
+   background Claude session.
 5. **Change cones itself.** Columns, harnesses and their defaults, pinned folders, scheduled
    jobs. `cones config` prints the file, the rules and the full reference.
 
@@ -49,6 +51,61 @@ a session at start and `cones rename ID NAME` names one later, through the harne
 rename, so a worker's row says what it is doing. `cones stop ID` ends a session's
 work and keeps its conversation; `cones rm ID` does what the dashboard's `ctrl+x` twice does
 to a row.
+
+## Running your own workers
+
+When the owner's task is wide enough that one session would serialize it, launch workers for
+it. The decomposition, the dependency order, the integration and the report back to the owner
+stay yours. Do not start a coordinator for this: a coordinator is for a folder whose agents came
+from somewhere else.
+
+What I dislike: a worker launched before its scope exists, so its first act is to ask what to
+do. Two workers in one checkout, sharing an index and a target directory. A piece whose whole
+content is waiting for another piece. A report that says "done" without a hash. Ending your
+turn with "I'll continue when they finish" when nothing will wake you. Calling a task finished
+because a process exited or a terminal went quiet. Stopping a session that is waiting for a
+native permission prompt. Reviewing a combined tree by reading diffs instead of running the
+project's checks on it.
+
+What I like: pieces that can be written and checked without waiting on each other. One
+worktree, one worker. A first prompt complete enough that the worker could finish without ever
+hearing from you again. A worker that reports a blocker early and keeps going on the independent
+part. Reading the worker's own words before believing its summary.
+
+Method is yours.
+
+**The first prompt is the contract.** It is the only message you know a worker reads before it
+begins. Put in its scope and the files it owns, what belongs to another worker, what it depends
+on, the checks it has to pass, the report you want back and the command it reports with. Say
+plainly that a peer's message is input and that scope changes come from the owner.
+
+**The report must wake you.** Your session takes a turn only when the owner writes, a
+background task of yours ends, or a message arrives. A worker's report written to a file or
+left in its own conversation does none of these, so tell every worker to send its report into
+your conversation: a Claude worker under a Claude launcher uses SendMessage to the name
+ListAgents gives you, and any other worker runs
+`cones comms --dir WORKER_FOLDER send YOUR_ID '<report>'`, where YOUR_ID is your
+`$CLAUDE_CODE_SESSION_ID` or `$CODEX_THREAD_ID`, or your row in `cones ls --json`. To also
+hear when a worker needs input, fails or leaves, run
+`cones comms --dir PATH wait --id ID ...` as a background task.
+
+**The report asks for:** the native session id, worktree and branch, the result or the blocker
+with what is missing, changed files, checks run and what they said, and the commit hash.
+Completion is that report plus your own review of it. Read `cones show ID` before you believe a
+summary, and prefer the worker's own checks over your impression of its diff.
+
+**Sharing the folder.** If nothing holds the folder, you may hold its coordinator claim
+yourself; one consumer reads a folder's inbox. If another coordinator holds it, leave the claim
+alone and cooperate through it, or give your task its own folder.
+
+**Integration.** Follow the project's own rules. Keep one ordered queue, read each diff and the
+author's checks, then run the project's required checks on the combined tree; a clean rebase is
+not evidence the combination passes. On a tree several workers touch, never stash and never
+stage by path: commit from a diff trimmed to your own hunks.
+
+**Stopping.** When the task is done, `cones stop` the workers you launched. Stop keeps the
+conversation, so the work stays readable and resumable. A worker still waiting on a native
+prompt is not finished, and every other session in the folder is not yours to stop.
 
 ## Ground rules
 
