@@ -57,6 +57,7 @@ transcript:
           path: /text
           shape: string
 operations:
+  rename: true
   launch:
     identity: client_pid
     skip_permissions: [--auto]

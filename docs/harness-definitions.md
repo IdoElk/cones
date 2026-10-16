@@ -102,8 +102,8 @@ Owned-terminal stop uses the host separately. `operations.message` supplies nati
 as a command, for Claude only `peer_inbox: {protocols: [...]}`, or for pi and OpenCode
 `reporter: <extension call>`; `unavailable: <reason>` states why a harness has none
 ([message delivery](harness.md#message-delivery)).
-`rename: true` enables a registered native handoff, currently Claude/Codex; YAML supplies no
-file-writing program.
+`rename: true` enables a registered native rename, currently Claude, Codex, pi and OpenCode
+([how each is named](cli.md#renaming-a-session)); YAML supplies no file-writing program.
 
 Command arguments are arrays with whole-argument placeholders. Allowed names depend on the
 operation: `prompt`, `remote`, `cwd`, `id`, `short_id`, `transcript`, fork `new_id` and message
@@ -117,7 +117,7 @@ probes run before their operation. A missing declared text/JSON version is an er
 Native version requirements are separate from this YAML schema version.
 
 Launch `model`, `provider` and `effort` bind native flags to [configured defaults](jobs.md#composer-harnesses).
-Unset values pass no flag. `bedrock` names the native switch, such as Claude's
+Unset values pass no flag. `name` is the flag `cones launch --name` passes. `bedrock` names the native switch, such as Claude's
 `CLAUDE_CODE_USE_BEDROCK`; omit it when the harness uses its own provider selection. Shared
 `AWS_PROFILE`/`AWS_REGION` are passed to all harnesses independently of these bindings.
 Codex daemon provider selection remains native adapter behavior.

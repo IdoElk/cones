@@ -256,3 +256,107 @@ fn a_note_to_a_terminal_only_harness_is_refused_with_the_reason() {
     );
     assert_eq!(f.log(pid).len(), 1, "{:?}", f.log(pid));
 }
+
+/// `cones rename` names a pi or OpenCode client cones owns through the call the harness's own
+/// rename makes, `setSessionName` and `session.update`, through the reporter's inbox.
+#[test]
+fn rename_names_an_owned_pi_and_opencode_through_their_own_call() {
+    let f = Fixture::new();
+    for harness in ["pi", "opencode"] {
+        let pid = f.launch("ok", harness);
+        let id = f.id(pid);
+        let out = f.cones("ok", &["rename", &id, "Ship it"]);
+        assert!(out.status.success(), "{harness}: {}", stderr(&out));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("renamed {id} ({harness}) to Ship it\n")
+        );
+        let log = f.log(pid);
+        assert_eq!(log.len(), 2, "{harness} was handed {log:?}");
+        let want = match harness {
+            "pi" => serde_json::json!({"name": "Ship it"}),
+            _ => {
+                serde_json::json!({"update": {"sessionID": log[0]["session"], "title": "Ship it"}})
+            }
+        };
+        assert_eq!(log[1], want);
+    }
+    assert_eq!(f.inbox_leftovers(), Vec::<PathBuf>::new());
+}
+
+/// `cones launch --name` uses pi's own `--name`; OpenCode has no such flag, so the launch
+/// renames the client once it is on the roster. A terminal-only harness keeps no name and the
+/// launch is refused before anything starts.
+#[test]
+fn launch_names_the_session_through_the_flag_or_the_rename() {
+    let f = Fixture::new();
+    let work = f.work.to_str().unwrap();
+    for harness in ["pi", "opencode"] {
+        let before = f.pids();
+        let out = f.cones(
+            "ok",
+            &[
+                "launch",
+                "--dir",
+                work,
+                "--harness",
+                harness,
+                "--name",
+                "Named",
+                "a task",
+            ],
+        );
+        assert!(out.status.success(), "{harness}: {}", stderr(&out));
+        let pid = f
+            .pids()
+            .into_iter()
+            .find(|pid| !before.contains(pid))
+            .unwrap();
+        let log = f.log(pid);
+        let args: Vec<_> = log[0]["args"].as_array().unwrap().iter().collect();
+        let flagged = args.windows(2).any(|w| w[0] == "--name" && w[1] == "Named");
+        match harness {
+            "pi" => assert!(flagged && log.len() == 1, "pi: {log:?}"),
+            _ => {
+                assert!(!flagged, "opencode: {args:?}");
+                assert_eq!(log[1]["update"]["title"], "Named", "opencode: {log:?}");
+            }
+        }
+    }
+    let before = f.pids();
+    let out = f.cones(
+        "ok",
+        &[
+            "launch",
+            "--dir",
+            work,
+            "--harness",
+            "gemini",
+            "--name",
+            "Named",
+            "a task",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("gemini keeps no session name cones can set"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(f.pids(), before, "nothing was started");
+}
+
+/// A running terminal-only client keeps no name cones can set, and nothing reaches it.
+#[test]
+fn rename_refuses_a_terminal_only_harness() {
+    let f = Fixture::new();
+    let pid = f.launch("ok", "gemini");
+    let out = f.cones("ok", &["rename", &f.id(pid), "Ship it"]);
+    assert!(!out.status.success(), "the rename was reported as done");
+    assert!(
+        stderr(&out).contains("gemini keeps no session name cones can set"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(f.log(pid).len(), 1, "{:?}", f.log(pid));
+}

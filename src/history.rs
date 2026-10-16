@@ -1051,13 +1051,20 @@ fn user_title(user: &harness::spec::MessageText, events: &[Value]) -> Option<Str
         .find_map(|event| user.headline_with_attachments(event, true))
 }
 
+/// A custom title outranks an agent name written after it, as in live discovery.
 fn claude_title(events: &[Value], named: bool) -> Option<String> {
-    events.iter().rev().find_map(|v| match v["type"].as_str() {
-        Some("custom-title") if named => v["customTitle"].as_str().and_then(fleet::headline),
-        Some("agent-name") if named => v["agentName"].as_str().and_then(fleet::headline),
-        Some("ai-title") if !named => v["aiTitle"].as_str().and_then(fleet::headline),
-        _ => None,
-    })
+    let last = |kind: &str, field: &str| {
+        events
+            .iter()
+            .rev()
+            .filter(|v| v["type"] == kind)
+            .find_map(|v| v[field].as_str().and_then(fleet::headline))
+    };
+    if named {
+        last("custom-title", "customTitle").or_else(|| last("agent-name", "agentName"))
+    } else {
+        last("ai-title", "aiTitle")
+    }
 }
 
 fn codex_columns_priced(path: &Path, catalog: Option<&crate::cost::Catalog>) -> Result<Columns> {

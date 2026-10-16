@@ -86,7 +86,7 @@ states:
         description: "Filter rows by text, :attention or :unread; enter keeps the filter and esc clears it."
       - keys: ["ctrl+n"]
         action: rename
-        description: "Rename the selected Claude or Codex session. Enter an empty name for native naming."
+        description: "Rename the selected Claude, Codex, pi or OpenCode session. Enter an empty name for native naming in Claude and Codex."
       - keys: ["ctrl+p"]
         action: highlight
         description: "Highlight the selected session, or remove its highlight. The colour is the config's highlight setting."

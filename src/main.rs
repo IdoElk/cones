@@ -133,6 +133,9 @@ enum Action {
         /// Reasoning effort, for a harness that takes one; defaults to the one in `defaults`.
         #[arg(long)]
         effort: Option<String>,
+        /// The session's name, through the harness's own launch flag or its rename.
+        #[arg(long)]
+        name: Option<String>,
         /// Print the shell command instead of starting anything.
         #[arg(long)]
         print_command: bool,
@@ -168,6 +171,13 @@ enum Action {
     Stop {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
         id: String,
+    },
+    /// Name a session through its harness's own rename, as the dashboard's ctrl+n does; see
+    /// docs/cli.md.
+    Rename {
+        /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
+        id: String,
+        name: String,
     },
     /// What the dashboard's ctrl+x twice does to a row: stop it, remove it or close it; see
     /// docs/cli.md.
@@ -537,6 +547,7 @@ fn execute(cli: Cli) -> Result<i32> {
             harness: named,
             model,
             effort,
+            name,
             print_command,
             no_prompt_record,
         } => {
@@ -575,6 +586,25 @@ fn execute(cli: Cli) -> Result<i32> {
                     "{kind} takes no --effort"
                 );
             }
+            let name = name.map(|n| n.trim().to_owned());
+            let spec = harness::spec(kind);
+            let flag = spec.launch.as_ref().is_some_and(|l| l.name.is_some());
+            if let Some(name) = &name {
+                ensure!(!name.is_empty(), "--name cannot be empty");
+                ensure!(
+                    !name.chars().any(char::is_control),
+                    "--name must be a single line without control characters"
+                );
+                ensure!(
+                    flag || spec.operations.rename,
+                    "{kind} keeps no session name cones can set"
+                );
+                ensure!(
+                    flag || !print_command,
+                    "{kind} has no launch flag for a name, so --print-command cannot carry one; \
+                     run the command, then `cones rename`"
+                );
+            }
             let prompt = prompt.unwrap_or_default();
             // Codex's command names its daemon's address, which only a running daemon reports.
             ensure!(
@@ -584,7 +614,13 @@ fn execute(cli: Cli) -> Result<i32> {
                     || cones::codex::daemon_pid(&cones::codex::home(&claude)).is_some(),
                 "{kind}'s command names its daemon's address and no daemon is running;                  --print-command starts nothing, so run `{kind} app-server daemon start` first"
             );
-            let start = harness::start(kind, &dir, prompt.trim(), &policy)?;
+            let start = harness::start(
+                kind,
+                &dir,
+                prompt.trim(),
+                name.as_deref().filter(|_| flag),
+                &policy,
+            )?;
             if print_command {
                 let command = match start {
                     harness::Start::Background(c) => c,
@@ -611,6 +647,25 @@ fn execute(cli: Cli) -> Result<i32> {
                 started.identity.describe()
             );
             println!("{}", started.id);
+            if let Some(name) = name.filter(|_| !flag) {
+                // The session is running whatever happens here, so its id is out first.
+                let session = cones::tui::fleet_rows(
+                    &claude,
+                    &state,
+                    &Ledger::new(&state)?.runs()?,
+                    &config::defaults(&jobs_path),
+                )?
+                .into_iter()
+                .find(|s| s.session_id == started.id)
+                .with_context(|| format!("{} is not on the roster yet to be named", started.id))?;
+                harness::rename(
+                    &session,
+                    &harness::home_of(&session, &claude),
+                    &state,
+                    &name,
+                )
+                .with_context(|| format!("{} started but was not named", started.id))?;
+            }
             Ok(0)
         }
         Action::Ls {
@@ -734,6 +789,27 @@ fn execute(cli: Cli) -> Result<i32> {
             let ids = rows.into_iter().map(|s| s.session_id);
             let id = by_prefix(ids, &id)?;
             print!("{}", cones::stop::session(&state, &claude, &id)?);
+            Ok(0)
+        }
+        Action::Rename { id, name } => {
+            let rows = cones::tui::fleet_rows(
+                &claude,
+                &state,
+                &Ledger::new(&state)?.runs()?,
+                &config::defaults(&jobs_path),
+            )?;
+            let ids = rows.iter().map(|s| s.session_id.clone());
+            let id = if id.len() >= 4 {
+                by_prefix(ids, &id)?
+            } else {
+                id
+            };
+            let session = rows
+                .iter()
+                .find(|s| s.session_id == id)
+                .with_context(|| format!("no session {id}; `cones ls` lists them"))?;
+            harness::rename(session, &harness::home_of(session, &claude), &state, &name)?;
+            println!("renamed {id} ({}) to {}", session.harness, name.trim());
             Ok(0)
         }
         Action::Rm { target } => {

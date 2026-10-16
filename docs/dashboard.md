@@ -169,7 +169,7 @@ conversations, and otherwise only that terminal.
 | `ctrl+s` | Group by state or directory. |
 | `ctrl+f` | Filter; Enter keeps it, Escape clears it. |
 | `ctrl+h` | Show or hide history. |
-| `ctrl+n` | Rename a Claude or Codex session. |
+| `ctrl+n` | Rename a Claude, Codex, pi or OpenCode session, as [`cones rename`](cli.md#renaming-a-session) does. |
 | `ctrl+p` | Toggle a temporary session highlight. |
 | `ctrl+y` | [Fork a conversation](#fork-a-conversation). |
 | `ctrl+t` | Pin a session above every group, or unpin it. |
@@ -177,8 +177,9 @@ conversations, and otherwise only that terminal.
 
 Rename accepts a manual name or an empty submission for native automatic naming. Codex's
 suggestion is accepted once ready. A key, paste or mouse action cancels a pending handoff.
-An external interactive Claude client supports manual transcript naming only and may later
-overwrite it.
+An external interactive Claude client supports manual transcript naming only; the name
+outranks the agent name the client writes later. pi and OpenCode take a typed name only,
+through the reporter of a client cones owns.
 
 The first `ctrl+x` arms the action; another key cancels it. Expiry uses `confirm_secs`.
 The row disappears while the action runs and returns if it fails.

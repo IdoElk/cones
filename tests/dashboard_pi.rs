@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const LIST_FOOTER: &str = "Session     enter return · ctrl+x stop · ctrl+t pin";
+const LIST_FOOTER: &str = "Session     enter return · ctrl+x stop · ctrl+n rename · ctrl+t pin";
 const PANE_FOOTER: &str = "tab back · ctrl+\\ full screen";
 /// With a draft in pi's editor Tab and Left stay native, and the footer stops offering them.
 const DRAFT_FOOTER: &str = "ctrl+z back · ctrl+\\ full screen";

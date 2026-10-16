@@ -27,6 +27,9 @@ if [ "$1" = rm ] && [ -e "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/allow-rm" ]; then
     echo "removed $2"
     exit 0
 fi
+if [ "$1" = attach ]; then
+    exec /usr/bin/python3 -u "$(dirname "$0")/fake-attach.py" "$2"
+fi
 home=${CLAUDE_CONFIG_DIR:?a stop must name the native home of its session}
 printf '%s\n' "$* $home" >> "$home/calls.log"
 if [ "$1" != stop ]; then
@@ -38,6 +41,46 @@ if [ -e "$home/refuse" ]; then
     exit 1
 fi
 echo "stopped $2"
+"#;
+
+/// `claude attach`: an empty editor that echoes what is typed and logs each submitted line to
+/// `typed.log` in the native home. `/rename NAME` appends the two records Claude Code's own
+/// command writes, `custom-title` and then `agent-name`.
+const ATTACH: &str = r#"
+import glob, json, os, sys, tty
+tty.setraw(0)
+home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
+[transcript] = glob.glob(os.path.join(home, "projects", "*", sys.argv[1] + "*.jsonl"))
+os.write(1, "\x1b[2J\x1b[H❯ ".encode())
+text = b""
+while True:
+    b = os.read(0, 1)
+    if not b:
+        break
+    if b != b"\r":
+        text += b
+        os.write(1, b)
+        continue
+    with open(os.path.join(home, "typed.log"), "ab") as f:
+        f.write(text + b"\n")
+    line = text.decode()
+    if line.startswith("/rename "):
+        name = line[len("/rename "):]
+        with open(transcript, "a") as f:
+            f.write(json.dumps({"type": "custom-title", "customTitle": name}) + "\n")
+            f.write(json.dumps({"type": "agent-name", "agentName": name}) + "\n")
+    os.write(1, "\r\n❯ ".encode())
+    text = b""
+"#;
+
+/// `codex app-server daemon start` reporting the fixture home's control socket.
+const CODEX: &str = r#"#!/bin/sh
+if [ "$1 $2 $3" = "app-server daemon start" ]; then
+    echo "{\"socketPath\":\"$CODEX_HOME/app-server-control/app-server-control.sock\"}"
+    exit 0
+fi
+echo "cones asked for codex $*" >&2
+exit 3
 "#;
 
 struct Fixture {
@@ -54,6 +97,7 @@ impl Fixture {
         fs::create_dir_all(&bin).unwrap();
         fs::write(bin.join("claude"), FAKE).unwrap();
         fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(bin.join("fake-attach.py"), ATTACH).unwrap();
         fs::create_dir_all(root.path().join(".claude/sessions")).unwrap();
         fs::create_dir_all(root.path().join("state")).unwrap();
         Self { root }
@@ -460,6 +504,7 @@ fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
                         terminal = Some(1);
                         json!({})
                     }
+                    "thread/name/set" => json!({}),
                     other => panic!("cones sent the daemon {other}"),
                 };
                 let reply = json!({"id": request["id"], "result": result}).to_string();
@@ -1138,4 +1183,133 @@ fn rm_forgets_a_codex_thread_and_keeps_its_rollout() {
         rollout.exists(),
         "a removal must leave the conversation resumable"
     );
+}
+
+/// A Claude background session takes `/rename` in a client opened only for it, the way the
+/// dashboard's ctrl+n hands it over, so the running session holds the name itself. The
+/// command returns once the session reports the name, and a later turn's own `agent-name`
+/// cannot take it back.
+#[test]
+fn rename_hands_a_background_claude_session_the_native_command() {
+    let f = Fixture::new();
+    let id = "aaaaaaaa-5555-4555-8555-555555555555";
+    let idle = Idle::new();
+    f.live(id, "bg", idle.0.id());
+    let transcript = f.transcript(id);
+
+    let out = f.cones(&["rename", "aaaaaaaa", "Ship it"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("renamed {id} (claude) to Ship it\n")
+    );
+    assert_eq!(
+        fs::read_to_string(f.home().join("typed.log")).unwrap(),
+        "/rename Ship it\n",
+        "one native command, typed once"
+    );
+    assert_eq!(f.calls(), "", "no other native subcommand was run");
+    let title = |f: &Fixture| {
+        f.rows()
+            .into_iter()
+            .find(|row| row["session"]["session_id"] == id)
+            .map(|row| row["session"]["title"].clone())
+    };
+    assert_eq!(title(&f), Some(json!("Ship it")));
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap()
+        .write_all(b"{\"type\":\"agent-name\",\"agentName\":\"auto name\"}\n")
+        .unwrap();
+    assert_eq!(title(&f), Some(json!("Ship it")));
+}
+
+/// A Claude session in someone else's terminal cannot be joined, so the rename appends the
+/// `custom-title` record its `/rename` writes. The session keeps re-appending its own
+/// `agent-name` every turn; the title written for it still wins.
+#[test]
+fn a_manual_title_on_a_running_interactive_claude_session_survives_its_next_turn() {
+    let f = Fixture::new();
+    let id = "aaaaaaaa-6666-4666-8666-666666666666";
+    let idle = Idle::new();
+    f.live(id, "interactive", idle.0.id());
+    let transcript = f.transcript(id);
+
+    let out = f.cones(&["rename", "aaaaaaaa", "Mine"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let records: Vec<serde_json::Value> = fs::read_to_string(&transcript)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        records.last().unwrap(),
+        &json!({"type": "custom-title", "customTitle": "Mine", "sessionId": id})
+    );
+    assert!(
+        !f.home().join("typed.log").exists(),
+        "nothing was typed anywhere"
+    );
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap()
+        .write_all(b"{\"type\":\"agent-name\",\"agentName\":\"auto name\"}\n")
+        .unwrap();
+    let row = f
+        .rows()
+        .into_iter()
+        .find(|row| row["session"]["session_id"] == id)
+        .unwrap();
+    assert_eq!(row["session"]["title"], "Mine");
+    assert!(idle.alive());
+}
+
+/// A Codex thread is named through its daemon's `thread/name/set`, which is what Codex's own
+/// `/rename` calls, whether or not a client shows the thread. A blank or multi-line name
+/// reaches nothing.
+#[test]
+fn rename_names_a_codex_thread_through_its_daemon() {
+    let f = Fixture::new();
+    let bin = f.root.path().join(".local/bin/codex");
+    fs::write(&bin, CODEX).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec0606f";
+    codex_thread(&f, id);
+    let calls = codex_daemon(&f, &[]);
+
+    for refused in ["  ", "two\nlines"] {
+        let out = f.cones(&["rename", &id[..8], refused]);
+        assert!(!out.status.success(), "{refused:?} was accepted");
+    }
+    assert!(methods(&calls).is_empty(), "{:?}", methods(&calls));
+    let out = f.cones(&["rename", &id[..8], "Fix the build"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("renamed {id} (codex) to Fix the build\n")
+    );
+    let set: Vec<_> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|call| call["method"] == "thread/name/set")
+        .map(|call| call["params"].clone())
+        .collect();
+    assert_eq!(set, [json!({"threadId": id, "name": "Fix the build"})]);
+}
+
+/// An id no row carries names nothing, and nothing native is run.
+#[test]
+fn rename_of_an_unknown_session_reaches_nothing() {
+    let f = Fixture::new();
+    let out = f.cones(&["rename", "nonexistent-session", "x"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("no session nonexistent-session"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(f.calls(), "");
 }

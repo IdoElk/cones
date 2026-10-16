@@ -661,6 +661,9 @@ pub struct Launch {
     pub remote: Vec<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
+    /// Native flag that names the session at launch. Without one, a launch that carries a
+    /// name renames the session once it has an id.
+    pub name: Option<String>,
     /// Native reasoning-effort flag, when the harness has one of its own.
     pub effort: Option<String>,
     /// Native arguments that start a session without permission prompts. Empty when the
@@ -1254,7 +1257,13 @@ impl HarnessSpec {
         );
         ensure!(
             !self.operations.rename
-                || matches!(self.kind, HarnessKind::Claude | HarnessKind::Codex),
+                || matches!(
+                    self.kind,
+                    HarnessKind::Claude
+                        | HarnessKind::Codex
+                        | HarnessKind::Pi
+                        | HarnessKind::Opencode
+                ),
             "rename requires a native rename adapter"
         );
         for kind in self.session_kinds.values().chain([&self.default_session]) {

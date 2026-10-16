@@ -1140,6 +1140,90 @@ pub fn at_empty_command_prompt(
     })
 }
 
+/// True once the native editor echoes `command` as typed, so pressing return submits it.
+/// Native editors indent wrapped lines. Whitespace in the echo can differ at those wraps;
+/// the bytes submitted remain the caller's.
+pub fn echoes_command(
+    screen: &vt100::Screen,
+    command: &str,
+    input: &crate::harness::spec::Input,
+) -> bool {
+    let Some((row, col)) = command_cursor(screen) else {
+        return false;
+    };
+    let echoed = (0..=row).rev().find_map(|start| {
+        let first = screen.contents_between(start, 0, start, screen.size().1);
+        if !first.trim_start().starts_with(['❯', '›']) {
+            return None;
+        }
+        Some(
+            (start..=row)
+                .map(|r| {
+                    screen.contents_between(r, 0, r, if r == row { col } else { screen.size().1 })
+                })
+                .collect::<Vec<_>>()
+                .join("")
+                .trim_start_matches(|c: char| {
+                    c.is_whitespace()
+                        || matches!(c, '❯' | '›')
+                        || (input.ignore_braille && ('\u{2800}'..='\u{28ff}').contains(&c))
+                })
+                .to_owned(),
+        )
+    });
+    echoed.is_some_and(|text| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .eq(command.chars().filter(|c| !c.is_whitespace()))
+    })
+}
+
+/// Type one slash command into a native client opened only for it, the way the dashboard
+/// hands a rename to a client it shows: wait for the empty editor, type, wait for the echo,
+/// submit. `done` reports when the harness has applied it; the client closes either way.
+pub fn submit_command(
+    client: Command,
+    command: &str,
+    input: &crate::harness::spec::Input,
+    mut done: impl FnMut() -> bool,
+) -> io::Result<()> {
+    let mut viewer = Viewer::spawn(client, 40, 160, None, Colors::default())?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut typed = false;
+    let mut submitted = false;
+    loop {
+        viewer.pump()?;
+        if submitted && done() {
+            return Ok(());
+        }
+        if let Some(status) = viewer.exited() {
+            return Err(io::Error::other(format!(
+                "the native client exited ({status}) before taking the command: {}",
+                String::from_utf8_lossy(viewer.stderr_tail()).trim()
+            )));
+        }
+        if Instant::now() > deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                if submitted {
+                    "the native client took the command and did not apply it within 20s"
+                } else {
+                    "the native client showed no empty editor to take the command within 20s"
+                },
+            ));
+        }
+        let screen = viewer.screen();
+        if !typed && at_empty_command_prompt(screen, input) {
+            viewer.write(command.as_bytes());
+            typed = true;
+        } else if typed && !submitted && echoes_command(screen, command, input) {
+            viewer.write(b"\r");
+            submitted = true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// OpenCode's standard session editor has a left bar, one padding row above and
 /// below the input, a model row, and a block underline. Check the whole input row
 /// so moving to the start of a draft cannot turn Left into dashboard navigation.

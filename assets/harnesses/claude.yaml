@@ -42,6 +42,7 @@ operations:
     session_kind: bg
     prefix: [--bg]
     model: --model
+    name: --name
     effort: --effort
     bedrock: CLAUDE_CODE_USE_BEDROCK
     prompt: [--, "{prompt}"]

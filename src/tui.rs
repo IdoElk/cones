@@ -12279,14 +12279,22 @@ impl App {
         }
         let kind = Kind::Session(session.session_id.clone(), String::new());
         // External interactive Claude clients cannot be joined. Keep the existing
-        // manual title operation there; generation needs the native client.
-        if session.harness == "claude"
-            && session.own_terminal()
-            && self.viewer_of(&kind).is_none()
-            && self.host_for(&session.session_id).is_none()
-            && !name.is_empty()
+        // manual title operation there; generation needs the native client. pi and
+        // OpenCode name themselves through the reporter, with no command to type.
+        let typed = matches!(spec.kind, HarnessKind::Claude | HarnessKind::Codex);
+        if !typed && name.is_empty() {
+            self.status = warning(format!("{} needs a name typed here", spec.name));
+            return Ok(());
+        }
+        if !typed
+            || (session.harness == "claude"
+                && session.own_terminal()
+                && self.viewer_of(&kind).is_none()
+                && self.host_for(&session.session_id).is_none()
+                && !name.is_empty())
         {
-            self.status = match fleet::rename(session, name) {
+            let home = harness::home_of(session, &self.claude);
+            self.status = match harness::rename(session, &home, &self.state, name) {
                 Ok(()) => format!("renamed to {name}"),
                 Err(e) => warning(format!("not renamed: {e:#}")),
             };
@@ -12373,44 +12381,8 @@ impl App {
                 self.rename.as_mut().unwrap().stage = RenameStage::Submitting;
             }
             RenameStage::Submitting => {
-                let Some((row, col)) = viewer::command_cursor(screen) else {
-                    return false;
-                };
-                let echoed = (0..=row).rev().find_map(|start| {
-                    let first = screen.contents_between(start, 0, start, screen.size().1);
-                    let text = first.trim_start();
-                    if !text.starts_with(['❯', '›']) {
-                        return None;
-                    }
-                    Some(
-                        (start..=row)
-                            .map(|r| {
-                                screen.contents_between(
-                                    r,
-                                    0,
-                                    r,
-                                    if r == row { col } else { screen.size().1 },
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("")
-                            .trim_start_matches(|c: char| {
-                                c.is_whitespace()
-                                    || matches!(c, '❯' | '›')
-                                    || (harness::spec(harness).input.ignore_braille
-                                        && ('\u{2800}'..='\u{28ff}').contains(&c))
-                            })
-                            .to_owned(),
-                    )
-                });
-                // Native editors indent wrapped lines. Whitespace in the echo can
-                // differ at those wraps; the bytes we submit remain the user's name.
                 let command = self.rename.as_ref().unwrap().command.clone();
-                if !echoed.is_some_and(|text| {
-                    text.chars()
-                        .filter(|c| !c.is_whitespace())
-                        .eq(command.chars().filter(|c| !c.is_whitespace()))
-                }) {
+                if !viewer::echoes_command(screen, &command, &harness::spec(harness).input) {
                     return false;
                 }
                 self.viewers[i].viewer.write(b"\r");
@@ -14579,7 +14551,7 @@ impl App {
             self.prepare_viewer(what, id.clone(), record, retry, move || {
                 match match start {
                     Some(start) => start()?,
-                    None => harness::start(kind, &dir, prompt.trim(), &policy)?,
+                    None => harness::start(kind, &dir, prompt.trim(), None, &policy)?,
                 } {
                     Start::Foreground(command) => Ok(command),
                     Start::Background(_) => anyhow::bail!("expected a {kind} viewer"),
@@ -14600,7 +14572,7 @@ impl App {
             let result = (|| -> Result<String> {
                 let Start::Background(mut command) = (match start {
                     Some(start) => start()?,
-                    None => harness::start(kind, &dir, prompt.trim(), &policy)?,
+                    None => harness::start(kind, &dir, prompt.trim(), None, &policy)?,
                 }) else {
                     anyhow::bail!("expected a background Claude session");
                 };

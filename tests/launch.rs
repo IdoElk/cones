@@ -812,6 +812,48 @@ fn print_command_starts_nothing_and_keeps_naming_the_folder() {
     );
 }
 
+/// `--name` goes to the harness's own launch flag, ahead of the prompt. A harness with none
+/// names its session by renaming it once it runs, which a printed command cannot do.
+#[test]
+fn print_command_carries_a_name_only_through_a_native_flag() {
+    let launch = |f: &Fixture, harness: &str| {
+        f.cones(
+            "ok",
+            &[
+                "launch",
+                "--dir",
+                f.work.to_str().unwrap(),
+                "--harness",
+                harness,
+                "--name",
+                "Fix the parser",
+                "--print-command",
+                "a prompt",
+            ],
+        )
+    };
+    let f = Fixture::new();
+    for harness in ["claude", "pi"] {
+        let out = launch(&f, harness);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let printed = stdout(&out);
+        let (flag, prompt) = (
+            printed.find("'--name' 'Fix the parser'"),
+            printed.find("a prompt"),
+        );
+        assert!(flag.is_some() && flag < prompt, "{harness}: {printed}");
+    }
+    let f = Fixture::codex();
+    let out = launch(&f, "codex");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("codex has no launch flag for a name"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(f.recovery().is_empty(), "nothing was launched");
+}
+
 /// Codex's command names its daemon's address, and asking for it used to start the daemon.
 /// With none running the print refuses and names the command that starts one; with one running
 /// it prints the address that daemon reports.

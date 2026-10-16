@@ -1,8 +1,9 @@
-//! End one thread's work over the already-running local Codex app-server.
+//! End or name one thread over the already-running local Codex app-server.
 //!
-//! Codex has no stop subcommand. Its app-server protocol interrupts a turn by id and closes the
-//! terminals a thread left running, and both keep the conversation. Nothing here starts a
-//! daemon, resumes or subscribes to a thread, or answers a request the daemon sends.
+//! Codex has no stop or rename subcommand. Its app-server protocol interrupts a turn by id,
+//! closes the terminals a thread left running, and names a thread the way its own `/rename`
+//! does, loaded or not; all of these keep the conversation. Nothing here starts a daemon,
+//! resumes or subscribes to a thread, or answers a request the daemon sends.
 use super::runtime::{connect, remaining, send};
 use serde_json::{Value, json};
 use std::{
@@ -76,9 +77,7 @@ impl Client {
     }
 }
 
-/// Interrupt the turn `thread` is running and close the terminals it left open, returning
-/// once the daemon reports both gone. A thread the daemon has not loaded runs nothing.
-pub fn stop(home: &Path, thread: &str) -> io::Result<Stopped> {
+fn client(home: &Path, name: &str) -> io::Result<Client> {
     let mut client = Client {
         socket: connect(home, DEADLINE)?,
         deadline: Instant::now() + DEADLINE,
@@ -88,11 +87,26 @@ pub fn stop(home: &Path, thread: &str) -> io::Result<Stopped> {
     client.call(
         "initialize",
         json!({
-            "clientInfo": {"name": "cones_stop", "version": env!("CARGO_PKG_VERSION")},
+            "clientInfo": {"name": name, "version": env!("CARGO_PKG_VERSION")},
             "capabilities": {"experimentalApi": true},
         }),
     )?;
     send(&mut client.socket, &json!({"method": "initialized"}))?;
+    Ok(client)
+}
+
+/// Name `thread` through `thread/name/set`, which writes Codex's own name records and tells
+/// every client showing the thread.
+pub fn rename(home: &Path, thread: &str, name: &str) -> io::Result<()> {
+    client(home, "cones_rename")?
+        .call("thread/name/set", json!({"threadId": thread, "name": name}))
+        .map(drop)
+}
+
+/// Interrupt the turn `thread` is running and close the terminals it left open, returning
+/// once the daemon reports both gone. A thread the daemon has not loaded runs nothing.
+pub fn stop(home: &Path, thread: &str) -> io::Result<Stopped> {
+    let mut client = client(home, "cones_stop")?;
     let loaded = client.call("thread/loaded/list", json!({}))?;
     if !loaded["data"]
         .as_array()

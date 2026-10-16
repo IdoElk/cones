@@ -56,7 +56,7 @@ fn invalid_definitions_fail_before_a_command_or_discovery_runs() {
             "/viewer/input",
             json!({"return_to_list":[{"key":"left","when":"empty_prompt"}]}),
         ),
-        (2, "/operations/rename", json!(true)),
+        (4, "/operations/rename", json!(true)),
         (1, "/operations/attach", json!(null)),
         (0, "/operations/launch/provider", json!("--provider")),
         (0, "/operations/launch/effort", json!("effort high")),

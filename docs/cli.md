@@ -26,13 +26,14 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones` | Open the dashboard; requires a terminal. |
 | `cones run JOB [--trigger manual\|schedule]` | Run a configured job. Trigger defaults to `manual`; launchd passes `schedule`. |
 | `cones run --prompt "..." [JOB]` | Run a [one-off task](#one-off-tasks). |
-| `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--print-command] [--no-prompt-record]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
+| `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--name NAME] [--print-command] [--no-prompt-record]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
 | `cones catchup [--dry-run]` | Recover [missed schedules](jobs.md#sleep-login-and-reboot). `--dry-run` prints `name missed <local time>` for each candidate and starts nothing. |
 | `cones ls [--dir PATH] [--job NAME] [--status S] [--json]` | [Read runs and live sessions](#reading-runs-and-sessions). |
 | `cones search QUERY [--dir PATH] [--harness NAME] [--json]` | [Search conversation history](#searching-conversations), including archived sessions. |
 | `cones index [status] [--timeout SECS] [--json]` | [Build the meaning index](#building-the-meaning-index) with progress, or report it. |
 | `cones show ID [--tail N] [--all] [--json]` | [Read a session's conversation](#reading-a-conversation). |
 | `cones mcp` | Serve [history tools over MCP stdio](#history-over-mcp). |
+| `cones rename ID NAME` | [Name a session](#renaming-a-session) through its harness's own rename, as the dashboard's `ctrl+n` does. |
 | `cones stop ID` | [Stop a session](#stopping-a-session) and keep its conversation. |
 | `cones rm TARGET` | Do to a run, session, job or folder what the dashboard's [`ctrl+x` twice](#removing-a-row) does. |
 | `cones comms [--dir PATH] send\|mail\|wait ...` | [Write to the agents in a folder, read their replies and wait for one](#comms). |
@@ -202,6 +203,10 @@ cones launch --dir ~/src/app --harness claude --model opus --effort high
 `start.harness` and `_in_picker` settings do not affect CLI selection.
 
 `--model` and `--effort` override defaults for this session only; unsupported flags fail.
+`--name` names the session through the harness's own launch flag (Claude and pi `--name`);
+Codex and OpenCode have none, so the launch [renames](#renaming-a-session) the session once
+its id is printed, and `--print-command` refuses a name for them. A harness with no session
+name of its own refuses `--name` before anything starts.
 Other unset settings use [configured defaults](jobs.md#composer-harnesses). Omitting the prompt
 opens the session waiting for input, except for Codex, which needs one. `--print-command` prints folder, environment and command
 without launching or recording anything. Codex's command names its daemon's address, so with
@@ -253,6 +258,25 @@ Use the id from `cones ls --json`. Four targets are supported:
 Ambiguous or unknown ids, unrelated external terminals and unsupported harness operations fail.
 See [detached launch](harness.md#detached-launch) for what a Codex stop leaves in place.
 The dashboard has separate [stop/removal controls](harness.md#native-actions).
+
+### Renaming a session
+
+```sh
+cones rename 5bf8392e "Fix the flaky test"
+```
+
+`ID` is an id from `cones ls` or an unambiguous prefix of at least four characters. The name
+must be one line. Each harness is named the way its own rename does it:
+
+| Target | Operation |
+| --- | --- |
+| Claude background | `/rename NAME` typed into a client attached only for it, as `ctrl+n` hands it over. The command returns once the transcript records the name, and the running session keeps it. |
+| Other Claude session | A `custom-title` record appended to its transcript, which outranks the `agent-name` a running session writes later. |
+| Codex thread | The daemon's `thread/name/set`, which Codex's `/rename` calls, loaded or not. Clients showing the thread see the new name. |
+| pi or OpenCode client cones owns | The reporter calls pi's `setSessionName` or OpenCode's `session.update`, which their own rename commands call. |
+
+A client cones does not own, a harness with no session name of its own (Gemini, Cursor Agent,
+Copilot, Amp, Droid, Kimi) and an ambiguous or unknown id fail without changing anything.
 
 ### Removing a row
 

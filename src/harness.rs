@@ -68,7 +68,15 @@ pub enum Start {
     Foreground(std::process::Command),
 }
 
-pub fn start(kind: HarnessKind, dir: &Path, prompt: &str, policy: &Policy) -> Result<Start> {
+/// `title` goes to the harness's own launch flag; a harness without one gets `None` here and
+/// is renamed by the caller once the session has an id.
+pub fn start(
+    kind: HarnessKind,
+    dir: &Path,
+    prompt: &str,
+    title: Option<&str>,
+    policy: &Policy,
+) -> Result<Start> {
     let launch = spec(kind)
         .launch
         .as_ref()
@@ -84,10 +92,21 @@ pub fn start(kind: HarnessKind, dir: &Path, prompt: &str, policy: &Policy) -> Re
         .ok_or_else(|| anyhow::anyhow!("{name} not found on the launch PATH"))?;
     let path = native_executable(kind, path);
     leave_and_return(kind)?;
+    let named: Vec<OsString> = match title {
+        Some(title) => {
+            let flag = launch
+                .name
+                .as_ref()
+                .with_context(|| format!("{name} has no launch flag for a session name"))?;
+            vec![flag.into(), title.into()]
+        }
+        None => Vec::new(),
+    };
     let mut start = match launch.handler {
         spec::LaunchHandler::ClaudeBackground => {
             let mut c = std::process::Command::new(path);
-            c.args(session_args(kind, None, prompt, policy)?)
+            c.args(&named)
+                .args(session_args(kind, None, prompt, policy)?)
                 .current_dir(dir);
             Start::Background(c)
         }
@@ -95,13 +114,15 @@ pub fn start(kind: HarnessKind, dir: &Path, prompt: &str, policy: &Policy) -> Re
             let (path, remote) =
                 codex_remote(&path, &crate::codex::home(&crate::fleet::claude_dir()?))?;
             let mut c = std::process::Command::new(path);
-            c.args(session_args(kind, Some((&remote, dir)), prompt, policy)?)
+            c.args(&named)
+                .args(session_args(kind, Some((&remote, dir)), prompt, policy)?)
                 .current_dir(dir);
             Start::Foreground(c)
         }
         spec::LaunchHandler::Terminal => {
             let mut c = std::process::Command::new(path);
-            c.args(session_args(kind, None, prompt, policy)?)
+            c.args(&named)
+                .args(session_args(kind, None, prompt, policy)?)
                 .current_dir(dir);
             if kind == HarnessKind::Opencode {
                 c.env(crate::opencode::reporting::ENABLE, "1");
@@ -732,7 +753,9 @@ pub fn message(
         spec::Message::PeerInbox { peer_inbox } => {
             return peer_inbox_send(session, home, text, &peer_inbox.protocols);
         }
-        spec::Message::Reporter { .. } => return reporter_send(session, state, text),
+        spec::Message::Reporter { .. } => {
+            return reporter_send(session, state, serde_json::json!({"text": text}));
+        }
         spec::Message::Unavailable { unavailable } => {
             bail!("a note cannot reach {}: {unavailable}", spec.name)
         }
@@ -777,12 +800,66 @@ pub fn message(
     Ok(())
 }
 
+/// Name a session the way its harness's own rename does, as the dashboard's ctrl+n does.
+///
+/// A Claude background session takes `/rename` in a client opened only for it, so the running
+/// session holds the name itself; a Claude session in someone else's terminal gets the
+/// `custom-title` record that command writes. Codex names the thread through its daemon, and
+/// pi and OpenCode clients cones owns name their conversation through the reporter's extension
+/// call. A harness without `operations.rename` keeps no name cones can set and says so.
+pub fn rename(
+    session: &crate::fleet::Session,
+    home: &Path,
+    state: &Path,
+    name: &str,
+) -> Result<()> {
+    let name = name.trim();
+    ensure!(!name.is_empty(), "a name is needed");
+    ensure!(
+        !name.chars().any(char::is_control),
+        "a session name must be a single line without control characters"
+    );
+    let spec = by_name(&session.harness).context("unknown session harness")?;
+    ensure!(
+        spec.operations.rename,
+        "{} keeps no session name cones can set",
+        spec.name
+    );
+    match spec.kind {
+        HarnessKind::Claude if spec.session(session.kind.as_deref()).join == spec::Join::Attach => {
+            let transcript = session.transcript_path.clone();
+            let applied = || {
+                transcript
+                    .as_deref()
+                    .is_some_and(|t| crate::fleet::tail(t, 0).0.as_deref() == Some(name))
+            };
+            crate::viewer::submit_command(
+                join(session, home, false)?,
+                &format!("/rename {name}"),
+                &spec.input,
+                applied,
+            )
+            .with_context(|| format!("renaming {}", session.session_id))
+        }
+        HarnessKind::Claude => crate::fleet::rename(session, name),
+        HarnessKind::Codex => {
+            let codex = executable("codex", &launch_path())
+                .ok_or_else(|| anyhow::anyhow!("codex not found on the launch PATH"))?;
+            // The daemon names stored threads too; starting it is idempotent.
+            codex_remote(&codex, home)?;
+            crate::codex::control::rename(home, &session.session_id, name)
+                .with_context(|| format!("renaming {}", session.session_id))
+        }
+        _ => reporter_send(session, state, serde_json::json!({"name": name})),
+    }
+}
+
 /// Hand one note to the reporter cones loaded into a pi or OpenCode client it owns, which
 /// submits it through the harness's own extension API as a user message, queued behind a
 /// running turn. The note goes to the conversation the client shows, since a `client_pid` row
 /// is its process. The reporter answers every note, so a client that never loaded it, or that
 /// shows no conversation, is an error here and not a note left lying in a directory.
-fn reporter_send(session: &crate::fleet::Session, state: &Path, text: &str) -> Result<()> {
+fn reporter_send(session: &crate::fleet::Session, state: &Path, body: Value) -> Result<()> {
     use std::time::{Duration, Instant};
     let (name, id) = (&session.harness, &session.session_id);
     let records = crate::terminal_host::records(state);
@@ -804,7 +881,7 @@ fn reporter_send(session: &crate::fleet::Session, state: &Path, text: &str) -> R
         })?;
     let note = inbox.join(format!("{}.json", uuid::Uuid::new_v4()));
     let (pending, reply) = (note.with_extension("tmp"), note.with_extension("done"));
-    std::fs::write(&pending, serde_json::json!({"text": text}).to_string())?;
+    std::fs::write(&pending, body.to_string())?;
     std::fs::rename(&pending, &note)?;
     // The reporter looks four times a second.
     let deadline = Instant::now() + Duration::from_secs(5);

@@ -6,7 +6,8 @@
 // a form process discovery recognises. As pi or OpenCode it loads the reporter cones passed it,
 // the shipped file and not a copy, and gives it the part of the native extension API the
 // reporter uses. Every user message the reporter submits through that API is appended to
-// `$HOME/reporter-fixture/<pid>.jsonl`, after a first line naming the session.
+// `$HOME/reporter-fixture/<pid>.jsonl`, after a first line naming the session and its
+// arguments, as is every name it sets.
 //
 // `FAKE_REPORTER=deaf` starts without loading the reporter, as a client does when its
 // extensions are disabled.
@@ -30,13 +31,14 @@ const cwd = process.cwd();
 
 if (name === "pi") {
   const session = crypto.randomUUID();
-  record({ harness: name, session });
+  record({ harness: name, session, args });
   if (!deaf) {
     const handlers = new Map();
     const { default: load } = await import(args[args.indexOf("--extension") + 1]);
     load({
       on: (event, handler) => handlers.set(event, handler),
       sendUserMessage: (text, options) => record({ text, options }),
+      setSessionName: (name) => record({ name }),
     });
     handlers.get("session_start")({ type: "session_start" }, {
       cwd,
@@ -46,7 +48,7 @@ if (name === "pi") {
   }
 } else if (name === "opencode") {
   const session = `ses_fixture${process.pid}`;
-  record({ harness: name, session });
+  record({ harness: name, session, args });
   if (!deaf) {
     const config = JSON.parse(readFileSync(process.env.OPENCODE_TUI_CONFIG, "utf8"));
     const [path, options] = config.plugin.at(-1);
@@ -67,7 +69,10 @@ if (name === "pi") {
       },
       route: { current: { name: "session", params: { sessionID: session } } },
       lifecycle: { onDispose: () => {} },
-      client: { session: { promptAsync: async (input) => { record(input); return {}; } } },
+      client: { session: {
+        promptAsync: async (input) => { record(input); return {}; },
+        update: async (input) => { record({ update: input }); return {}; },
+      } },
     }, options);
   }
 } else {

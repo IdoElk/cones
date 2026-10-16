@@ -1233,17 +1233,20 @@ pub fn headline(text: &str) -> Option<String> {
 }
 
 /// User-set titles override generated titles regardless of their order in the transcript.
+/// A `custom-title` also outranks a later `agent-name`: a native `/rename` writes both, and a
+/// live session re-appends its own `agent-name` every turn, which would otherwise undo a
+/// title written for it while it runs.
 fn scan(lines: &str) -> (Option<String>, Vec<String>) {
     let mut out = (None, Vec::new());
-    let mut ai = None;
+    let (mut custom, mut agent, mut ai) = (None, None, None);
     for line in lines.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         match v["type"].as_str() {
             Some("ai-title") => ai = v["aiTitle"].as_str().map(Into::into),
-            Some("agent-name") => out.0 = v["agentName"].as_str().map(Into::into),
-            Some("custom-title") => out.0 = v["customTitle"].as_str().map(Into::into),
+            Some("agent-name") => agent = v["agentName"].as_str().map(Into::into),
+            Some("custom-title") => custom = v["customTitle"].as_str().map(Into::into),
             Some("assistant") => out.1.extend(
                 v["message"]["content"]
                     .as_array()
@@ -1257,7 +1260,7 @@ fn scan(lines: &str) -> (Option<String>, Vec<String>) {
             _ => {}
         }
     }
-    out.0 = out.0.or(ai);
+    out.0 = custom.or(agent).or(ai);
     out
 }
 
@@ -1288,6 +1291,7 @@ pub fn rename(session: &Session, name: &str) -> Result<()> {
 struct Report {
     /// The user's first instruction, used while Claude has not supplied a descriptive name.
     first_prompt: Option<String>,
+    custom_title: Option<String>,
     title: Option<String>,
     ai_title: Option<String>,
     last: Option<String>,
@@ -1381,7 +1385,11 @@ pub(crate) fn history_columns_priced(
     let report = report_with_activity(transcript, false, catalog)?;
     let (cost_usd, cost_info) = report.costs.report(None);
     Ok(crate::history::Columns {
-        title: report.title.or(report.ai_title).or(report.first_prompt),
+        title: report
+            .custom_title
+            .or(report.title)
+            .or(report.ai_title)
+            .or(report.first_prompt),
         model: report.model,
         tokens_in: report.tokens_in,
         tokens_out: report.tokens_out,
@@ -1483,8 +1491,9 @@ fn report_with_activity(
         // strings from the full pass, so it can find titles outside the tail window.
         if !activity {
             match event["type"].as_str() {
+                // As in `scan`, a custom title outranks the agent name written after it.
                 Some("custom-title") => {
-                    r.title = event["customTitle"].as_str().and_then(headline);
+                    r.custom_title = event["customTitle"].as_str().and_then(headline);
                 }
                 Some("agent-name") => {
                     r.title = event["agentName"].as_str().and_then(headline);

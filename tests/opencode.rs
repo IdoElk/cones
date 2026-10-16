@@ -438,6 +438,7 @@ fn native_launch_and_resume_preserve_the_database_and_probe_stderr() {
             HarnessKind::Opencode,
             &home,
             "--auto literal",
+            None,
             &Policy::default(),
         )
         .unwrap();

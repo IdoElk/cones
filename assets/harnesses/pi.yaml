@@ -38,9 +38,11 @@ transcript:
   roots:
     - {path: sessions, env: PI_CODING_AGENT_SESSION_DIR, depth: 1, archived: false}
 operations:
+  rename: true
   launch:
     identity: client_pid
     model: --model
+    name: --name
     provider: --provider
     effort: --thinking
     prompt: [--, "{prompt}"]

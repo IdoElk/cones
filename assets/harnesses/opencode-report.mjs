@@ -68,9 +68,10 @@ export default {
         invalidate();
       }
     };
-    // Each `<name>.json` is {text} and is answered by `<name>.done`, so the sender
-    // learns whether OpenCode took the note. A note that cannot be removed was withdrawn by
-    // its sender, or taken by an earlier pass still awaiting OpenCode, and is not delivered.
+    // Each `<name>.json` is {text}, or {name} for the session title, and is answered by
+    // `<name>.done`, so the sender learns whether OpenCode took the note. A note that cannot be
+    // removed was withdrawn by its sender, or taken by an earlier pass still awaiting
+    // OpenCode, and is not delivered.
     const notes = join(dirname(options.path), "notes");
     const deliver = async () => {
       let names;
@@ -86,6 +87,10 @@ export default {
           const id = route.name === "session" ? route.params?.sessionID : undefined;
           if (!id) {
             answer = { error: "this OpenCode shows no session" };
+          } else if (note.name !== undefined) {
+            // What OpenCode's own rename dialog calls.
+            const result = await api.client.session.update({ sessionID: id, title: note.name });
+            if (result?.error) answer = { error: JSON.stringify(result.error) };
           } else {
             // The native prompt endpoint: OpenCode queues it behind a running turn.
             const result = await api.client.session.promptAsync({

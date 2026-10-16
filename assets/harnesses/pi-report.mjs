@@ -23,9 +23,9 @@ export default function report(pi) {
       renameSync(`${path}.tmp`, path);
     } catch { invalidate(); }
   };
-  // Each `<name>.json` is {text} and is answered by `<name>.done`, so the sender
-  // learns whether Pi took the note. A note that cannot be removed was withdrawn by its
-  // sender and is not delivered.
+  // Each `<name>.json` is {text}, or {name} for Pi's own session name, and is answered by
+  // `<name>.done`, so the sender learns whether Pi took the note. A note that cannot be
+  // removed was withdrawn by its sender and is not delivered.
   const deliver = () => {
     let names;
     try { names = readdirSync(notes); } catch { return; }
@@ -35,8 +35,11 @@ export default function report(pi) {
       let text, answer = {};
       try { text = readFileSync(file, "utf8"); rmSync(file); } catch { continue; }
       try {
+        const note = JSON.parse(text);
+        // `/name` calls the same; Pi records it as a session_info entry.
+        if (note.name !== undefined) pi.setSessionName(note.name);
         // Pi runs it at once when idle and queues it behind the current assistant turn otherwise.
-        pi.sendUserMessage(JSON.parse(text).text, { deliverAs: "steer" });
+        else pi.sendUserMessage(note.text, { deliverAs: "steer" });
       } catch (error) { answer = { error: String(error?.message ?? error) }; }
       try {
         writeFileSync(`${done}.tmp`, JSON.stringify(answer), { mode: 0o600 });
