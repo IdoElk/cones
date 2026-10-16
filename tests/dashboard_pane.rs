@@ -299,3 +299,42 @@ fn the_selected_folder_is_the_terminals_working_directory() {
         "quitting names cones' folder: {named:?}"
     );
 }
+
+#[test]
+fn a_plain_path_in_the_pane_links_to_its_file() {
+    let mut d = Dashboard::new("pane-path-link", &[]);
+    fs::write(d.home().join(".zshrc"), format!("PROMPT='{PROMPT} '\n")).unwrap();
+    let project = d.project();
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(project.join("src/main.rs"), "").unwrap();
+    fs::write(project.join("notes.md"), "").unwrap();
+    d.start();
+    d.press("enter", ENTER);
+    d.wait_for("a shell in the pane", |s| s.contains(PROMPT));
+    // The escaped letters keep the echoed command from holding the printed paths.
+    d.typed(concat!(
+        r"printf 'see src/ma\x69n.rs:12:3, \x6eotes.md. and gone/\x6eope.rs\n'",
+        "\r"
+    ));
+    let screen = d.wait_for("the printed paths", |s| s.contains("notes.md. and"));
+    d.capture("linked");
+    let main = Some(format!("file://{}/src/main.rs", project.display()));
+    assert_eq!(d.link_of("src/main.rs:12:3,"), main, "{screen}");
+    assert_eq!(
+        d.link_of(":3, notes"),
+        main,
+        "the suffix is linked:\n{screen}"
+    );
+    assert_eq!(d.link_of(", notes"), None, "{screen}");
+    let notes = Some(format!("file://{}/notes.md", project.display()));
+    assert_eq!(d.link_of("notes.md. and"), notes, "{screen}");
+    assert_eq!(
+        d.link_of(". and"),
+        None,
+        "the trailing period stays out:\n{screen}"
+    );
+    assert_eq!(d.link_of("gone/nope.rs"), None, "{screen}");
+    d.press("ctrl+z", CTRL_Z);
+    d.wait_for("the list", |s| s.contains("tab pane"));
+    d.quit();
+}

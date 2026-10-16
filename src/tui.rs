@@ -16956,10 +16956,20 @@ impl App {
     /// Draw the emulator cursor only when focused and at the live scroll position.
     fn draw_viewer(&mut self, frame: &mut Frame, i: usize, pane: Rect) {
         let focused = self.focus == Some(i);
+        // Paths a pane prints are relative to its session's folder, or a shell's live one.
+        let open = &self.viewers[i];
+        let base = self
+            .data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == open.key)
+            .map(|s| s.cwd.clone())
+            .or_else(|| crate::process_info::cwd_of(open.viewer.pid()))
+            .unwrap_or_else(|| self.cwd.clone());
         let open = &mut self.viewers[i];
         open.viewer.resize(pane.height, pane.width);
         let screen = open.viewer.display_screen();
-        viewer::render(screen, pane, frame.buffer_mut());
+        viewer::render(screen, pane, frame.buffer_mut(), &base);
         if focused && !screen.hide_cursor() && !open.viewer.scrolled() {
             let (row, mut col) = screen.cursor_position();
             col = col.min(pane.width.saturating_sub(1));

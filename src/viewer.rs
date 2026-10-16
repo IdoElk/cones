@@ -19,6 +19,7 @@ use std::{
         fd::{AsRawFd, FromRawFd, IntoRawFd},
         unix::process::{CommandExt, ExitStatusExt},
     },
+    path::Path,
     process::{Child, ChildStderr, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
@@ -951,10 +952,12 @@ fn color(c: vt100::Color) -> Color {
 /// Render clipped cells; the caller draws the real terminal cursor. A narrow cell inside an
 /// OSC 8 link carries the link's escapes around its text, with its width forced to one so
 /// ratatui does not count the target, and the terminal around cones opens it on its own
-/// link click. Wide cells are drawn without their link.
-pub fn render(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
+/// link click. Wide cells are drawn without their link. A path printed as plain text that
+/// names an existing file or folder, from `base` when relative, is drawn as a `file://` link.
+pub fn render(screen: &vt100::Screen, area: Rect, buf: &mut Buffer, base: &Path) {
     let (rows, cols) = screen.size();
     for row in 0..rows.min(area.height) {
+        let paths = path_links(screen, row, cols.min(area.width), base);
         for col in 0..cols.min(area.width) {
             let Some(cell) = screen.cell(row, col) else {
                 continue;
@@ -981,7 +984,12 @@ pub fn render(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
             if cell.is_wide_continuation() {
                 target.set_symbol("");
             } else if let Some(url) = (cell.has_contents() && !cell.is_wide())
-                .then(|| screen.link(cell.link()))
+                .then(|| {
+                    screen
+                        .link(cell.link())
+                        .map(|url| url.to_string())
+                        .or_else(|| paths[usize::from(col)].clone())
+                })
                 .flatten()
             {
                 target.set_symbol(&format!(
@@ -996,6 +1004,85 @@ pub fn render(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
             }
         }
     }
+}
+
+/// Each column's `file://` target for the plain-text paths on one row. A word of path
+/// characters with a `/` or a dotted name is a path when it names something that exists;
+/// trailing punctuation and a `:line` or `:line:col` suffix stay out of the lookup, and the
+/// suffix stays inside the link. Cells already in an OSC 8 link, and paths wrapped onto the
+/// next row, are left alone.
+// ponytail: one stat per candidate per drawn frame; cache by path if a busy pane shows it.
+fn path_links(screen: &vt100::Screen, row: u16, cols: u16, base: &Path) -> Vec<Option<String>> {
+    let mut links = vec![None; usize::from(cols)];
+    let word = |c: char| c.is_ascii_alphanumeric() || "/._~+@%=:#-".contains(c);
+    let mut col = 0;
+    while col < cols {
+        let char_at = |col: u16| {
+            screen
+                .cell(row, col)
+                .filter(|c| c.link() == 0 && !c.is_wide() && !c.is_wide_continuation())
+                .and_then(|c| c.contents().chars().next())
+                .filter(|&c| word(c))
+        };
+        if char_at(col).is_none() {
+            col += 1;
+            continue;
+        }
+        let start = col;
+        let mut text = String::new();
+        while col < cols
+            && let Some(c) = char_at(col)
+        {
+            text.push(c);
+            col += 1;
+        }
+        let shown = text.trim_end_matches(['.', ',', ':', ';']);
+        let mut path = shown;
+        for _ in 0..2 {
+            if let Some((head, n)) = path.rsplit_once(':')
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+            {
+                path = head;
+            }
+        }
+        let dotted = path
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.rsplit_once('.'))
+            .is_some_and(|(stem, ext)| {
+                !stem.is_empty() && ext.bytes().any(|b| b.is_ascii_alphabetic())
+            });
+        if path.contains("://") || path.contains(':') || !(path.contains('/') || dotted) {
+            continue;
+        }
+        let full = match path.strip_prefix("~/") {
+            Some(rest) => dirs::home_dir().map(|home| home.join(rest)),
+            None => Some(base.join(path)),
+        };
+        let Some(full) = full.filter(|full| full.exists()) else {
+            continue;
+        };
+        let url = file_url(&full);
+        for c in start..start + shown.len() as u16 {
+            links[usize::from(c)] = Some(url.clone());
+        }
+    }
+    links
+}
+
+/// `file://` with every byte outside the unreserved set and `/` percent-encoded.
+fn file_url(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut url = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            url.push(b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
 }
 
 /// The text between two cells of the displayed screen, inclusive, with trailing blanks
@@ -1545,7 +1632,7 @@ mod tests {
         let mut p = vt100::Parser::new(2, 10, 0);
         p.process(b"a\xe4\xb8\xadb \x1b[1;31mR");
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-        render(p.screen(), buf.area, &mut buf);
+        render(p.screen(), buf.area, &mut buf, Path::new("/"));
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "a");
         assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "中");
         assert_eq!(buf.cell((2, 0)).unwrap().symbol(), "");

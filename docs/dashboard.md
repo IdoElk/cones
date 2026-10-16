@@ -338,12 +338,13 @@ along the divider, the whole divider lights up while dragged, the pane keeps 30 
 and the release saves the share as [`pane.ratio`](jobs.md#pane). `alt+m` hands the
 mouse to the terminal, for a selection that crosses regions, and takes it back. A link a
 client prints with OSC 8 reaches the terminal around cones, which opens it on its own link
-click. While cones reads the mouse, Ghostty takes that click only with shift added, as
-cmd+shift+click, or after `alt+m`. Cones names the selected row's folder to the terminal as
-its working directory with OSC 7, so a relative path a session printed as plain text, such
-as `src/main.rs`, opens from that folder; Ghostty reads a `:line` suffix as part of the file
-name. Quitting names cones' own folder again. See [diagnostics](cli.md#diagnostics) for
-delays.
+click. A path a pane prints as plain text, such as `src/main.rs:12`, is drawn as a
+`file://` link when it names an existing file or folder, read from the session's folder or a
+shell's current one; the `:line` suffix is shown inside the link but not passed on. While
+cones reads the mouse, Ghostty takes a link click only with shift added, as cmd+shift+click,
+or after `alt+m`. Cones also names the selected row's folder to the terminal as its working
+directory with OSC 7, and its own folder again on quit. See
+[diagnostics](cli.md#diagnostics) for delays.
 
 ## Composer
 

@@ -45,7 +45,8 @@ pub fn cwd(pid: u32) -> Option<PathBuf> {
     )
 }
 
-fn cwd_of(pid: u32) -> Option<PathBuf> {
+/// [`cwd`] uncounted, for a caller that asks on every drawn frame.
+pub fn cwd_of(pid: u32) -> Option<PathBuf> {
     let pid = i32::try_from(pid).ok().filter(|&p| p > 1)?;
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
