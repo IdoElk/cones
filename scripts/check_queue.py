@@ -21,6 +21,7 @@ import time
 BUILD_SLOTS = 2
 GATE_SLOTS = 2
 TASKPOLICY = "/usr/sbin/taskpolicy"
+PRIO_DARWIN_PROCESS = 4
 
 
 def signal_group(pid, signum):
@@ -166,6 +167,12 @@ def lease(kind, stage, command):
         take(lock, fcntl.LOCK_EX, waiter, [lock_path, *slot_paths])
         fcntl.flock(turnstile, fcntl.LOCK_UN)
         record(lock)
+        if env.get("CONES_CHECK_CI") and os.path.exists(TASKPOLICY):
+            # `scripts/check ci`: the efficiency cores stand in for a loaded CI runner.
+            command = [TASKPOLICY, "-b", *command]
+        elif hasattr(os, "setpriority"):
+            # Normal priority even when the gate itself was started in the background.
+            os.setpriority(PRIO_DARWIN_PROCESS, 0, 0)
     waited = time.monotonic() - requested
     if waiter.waiting_for is not None:
         console(f"acquired {kind} slot (PID {os.getpid()})")

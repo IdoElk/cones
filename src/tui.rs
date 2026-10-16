@@ -83,10 +83,21 @@ fn is_bare_esc(e: &Event) -> bool {
 fn split_mouse_report() -> Result<Option<Vec<Event>>> {
     // ponytail: fixed 50ms hold on Esc; the two reads of one
     // report land microseconds apart, and a typed Esc waits no longer than a frame or three.
-    let deadline = Instant::now() + Duration::from_millis(50);
+    // Tests on a loaded machine widen it with CONES_TEST_SPLIT_MS.
+    let window = std::env::var("CONES_TEST_SPLIT_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .unwrap_or(50);
+    let deadline = Instant::now() + Duration::from_millis(window);
     let mut read = Vec::new();
     let mut text = String::new();
-    while event::poll(deadline.saturating_duration_since(Instant::now()))? {
+    // crossterm answers a zero timeout with no event even with one queued, so a dashboard
+    // that stalled past the deadline still looks once more.
+    while event::poll(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .max(POINTER_PEEK),
+    )? {
         let e = event::read()?;
         let c = match &e {
             Event::Key(k) if (k.modifiers - KeyModifiers::SHIFT).is_empty() => match k.code {
@@ -13363,8 +13374,12 @@ impl App {
             let mut lines = Vec::new();
             let mut failed = None;
             let pumping = Instant::now();
+            let mut output = false;
             match open.viewer.pump() {
-                Ok(changed) => dirty |= changed && on_view,
+                Ok(changed) => {
+                    output = changed;
+                    dirty |= changed && on_view;
+                }
                 Err(e) => failed = Some(format!("{} failed: {e}", open.what)),
             }
             if !open.first_paint_logged
@@ -13390,6 +13405,7 @@ impl App {
             let context = json!({
                 "operation_id": open.operation.as_ref().map(|o| &o.id),
                 "row_id": open.key, "harness": open.harness, "viewer_pid": open.viewer.pid(),
+                "output": output,
             });
             self.measured(
                 "viewer_pump",

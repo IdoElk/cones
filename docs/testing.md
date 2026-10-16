@@ -7,13 +7,24 @@ first and take no slot, so a formatting failure returns at once. Compiling (Clip
 once, under background QoS (`taskpolicy -b`), which keeps them on the efficiency
 cores. Running the built tests takes the test slot, which is exclusive, because
 wall-clock tests flake under load; it waits for running builds, and a waiting test
-run holds back new builds so they cannot starve it. Tests run at normal priority.
+run holds back new builds so they cannot starve it. Tests run at normal priority,
+even when the gate itself was started at background priority.
 Waiting checks print the holder's PID and checkout. Cancellation stops the gate's
 process group. Each lease is inherited by Cargo, so killing the wrapper cannot
 admit another check while its child still runs. The lock files under `~/.cones`
 stay in place; the kernel releases a lease when its last owner exits. Builds hold
 `check.lock` shared and test runs hold it exclusively, which is how older copies of
 the wrapper, which hold it exclusively for a whole gate, still queue with this one.
+
+`scripts/check ci` runs every test target the way CI's loaded runner does: three
+test threads, on the efficiency cores under background QoS. A quiet local gate
+hides timing assumptions that a GitHub macOS runner breaks; this mode exposes them
+before a push instead of after it. It takes about ten minutes, so run it
+before committing a test that waits, sleeps or measures time, and after CI fails a
+test that passes locally. A test whose timing window a loaded machine can miss
+widens it for its own dashboard, as the split wheel report tests do with
+`CONES_TEST_SPLIT_MS`; one that measures cost asserts a median or a count, never
+a mean.
 
 The slots control calls through this script. Direct Cargo invocations and other
 applications are outside them. There is no FIFO ordering guarantee or hard machine

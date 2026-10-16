@@ -1650,7 +1650,7 @@ fn arrows_walk_the_rows_of_a_wrapped_draft_before_they_reach_the_list() {
 }
 
 /// How many frames followed input, from the debug log's timing summaries, and the median
-/// viewer pump in milliseconds, from its traced samples.
+/// pump of a viewer with no output, in milliseconds, from the traced samples.
 fn input_frames_and_pump_ms(log: &str) -> (u64, f64) {
     let (mut frames, mut pumps) = (0, Vec::new());
     for record in records(log) {
@@ -1659,11 +1659,14 @@ fn input_frames_and_pump_ms(log: &str) -> (u64, f64) {
             frames += data["phases"]["input_to_draw"]["count"]
                 .as_u64()
                 .unwrap_or(0);
-        } else if record["event"] == "timing" && data["phase"] == "viewer_pump" {
+        } else if record["event"] == "timing"
+            && data["phase"] == "viewer_pump"
+            && data["output"] == false
+        {
             pumps.push(data["duration_ms"].as_f64().unwrap());
         }
     }
-    assert!(!pumps.is_empty(), "no viewer pump was traced");
+    assert!(!pumps.is_empty(), "no idle viewer pump was traced");
     pumps.sort_by(f64::total_cmp);
     (frames, pumps[pumps.len() / 2])
 }
@@ -1724,7 +1727,10 @@ fn a_wheel_flood_reaches_the_pane_whole_in_a_few_frames() {
     // An idle viewer's pump returns at once instead of waiting for output that never comes.
     // A pump that waits sleeps at least PUMP_WAIT, 1ms, so the median is clear of runner
     // noise that moves a mean.
-    assert!(pump_ms < 1.0, "the median viewer pump took {pump_ms:.2}ms");
+    assert!(
+        pump_ms < 1.0,
+        "the median idle viewer pump took {pump_ms:.2}ms"
+    );
     for mut s in seeded {
         s.daemon.kill().unwrap();
         s.daemon.wait().unwrap();

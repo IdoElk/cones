@@ -148,22 +148,26 @@ fn dragging_the_divider_resizes_list_and_pane_and_persists() {
     d.quit();
 }
 
+/// The hold on a bare Esc, widened from 50ms: a loaded runner can stall the test between
+/// the two halves of a report for longer than that.
+const SPLIT_WINDOW: (&str, &str) = ("CONES_TEST_SPLIT_MS", "1000");
+
 #[test]
 fn a_split_wheel_report_never_reaches_the_pane() {
     let mut d = Dashboard::new("pane-split-wheel-report", &[]);
+    d.env.push(SPLIT_WINDOW);
     fs::write(d.home().join(".zshrc"), format!("PROMPT='{PROMPT} '\n")).unwrap();
     d.start();
     d.press("enter", ENTER);
     d.wait_for("a shell in the pane", |s| s.contains(PROMPT));
     d.typed("cat -v > split.txt\r");
-    // The Esc read alone, as crossterm reports a lone byte, and the rest a moment later. The
-    // gap stays well inside the 50ms window even when a loaded runner oversleeps.
+    // The Esc read alone, as crossterm reports a lone byte, and the rest a moment later.
     d.burst("wheel report, Esc", b"\x1b");
     std::thread::sleep(std::time::Duration::from_millis(2));
     d.press("wheel report, text", b"[<65;80;5M");
     // A typed Esc waits out the window and still reaches the shell.
     d.press("esc", b"\x1b");
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_millis(1200));
     d.typed("ok\r");
     d.press("ctrl+d", b"\x04");
     let out = d.wait_file("project/split.txt", |s| s.ends_with('\n'));
@@ -181,6 +185,7 @@ fn a_split_wheel_report_never_reaches_the_pane() {
 #[test]
 fn a_split_wheel_report_never_reaches_the_list_input() {
     let mut d = Dashboard::new("list-split-wheel-report", &[]);
+    d.env.push(SPLIT_WINDOW);
     d.start();
     d.wait_text("Type a command");
     d.burst("wheel report, Esc", b"\x1b");

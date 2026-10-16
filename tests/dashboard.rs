@@ -55,6 +55,8 @@ pub struct Dashboard {
     pub exe: PathBuf,
     /// Start with `--trace`, which logs every timing sample.
     pub trace: bool,
+    /// More environment for the dashboard, after the fixture's own.
+    pub env: Vec<(&'static str, &'static str)>,
 }
 
 impl Dashboard {
@@ -98,6 +100,7 @@ impl Dashboard {
             keys: String::new(),
             exe: PathBuf::from(env!("CARGO_BIN_EXE_cones")),
             trace: false,
+            env: Vec::new(),
         }
     }
 
@@ -183,6 +186,7 @@ impl Dashboard {
             command.env_remove(name);
         }
         command.envs(self.env()).env("CONES_TEST_FAST", "1");
+        command.envs(self.env.iter().copied());
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {

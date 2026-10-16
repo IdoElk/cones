@@ -2,8 +2,9 @@
 set -euo pipefail
 
 usage() {
-    echo 'Usage: scripts/check [all|fmt|clippy|reporting|stress|install|test [cargo test arguments...]]'
+    echo 'Usage: scripts/check [all|ci|fmt|clippy|reporting|stress|install|test [cargo test arguments...]]'
     echo 'Defaults to fmt, reporting, clippy, and all test targets. Full logs remain in TMPDIR.'
+    echo 'ci runs all test targets as slowly as a GitHub macOS runner, to catch timing flakes.'
     echo 'install builds HEAD in a detached worktree and installs it under ~/.local.'
 }
 
@@ -11,7 +12,7 @@ mode=${1:-all}
 if (( $# )); then shift; fi
 case "$mode" in
     -h|--help) usage; exit 0 ;;
-    all|fmt|clippy|reporting|stress|install)
+    all|ci|fmt|clippy|reporting|stress|install)
         if (( $# )); then usage >&2; exit 2; fi
         ;;
     test) ;;
@@ -87,6 +88,11 @@ case "$mode" in
         run_check fmt none cargo fmt --check
         run_check reporting none node --test tests/reporting.mjs
         run_check clippy build cargo clippy --all-targets -- -D warnings
+        run_tests --all-targets
+        ;;
+    ci)
+        # Three test threads on the efficiency cores, as on the runner's three vCPUs.
+        export CONES_CHECK_CI=1 RUST_TEST_THREADS=3
         run_tests --all-targets
         ;;
     fmt) run_check fmt none cargo fmt --check ;;

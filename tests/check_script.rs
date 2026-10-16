@@ -32,7 +32,9 @@ impl Fixture {
                 format!("{}:/usr/bin:/bin", self.dir.path().display()),
             )
             .env("TMPDIR", self.dir.path())
-            .env("CONES_CHECK_STATE_DIR", self.dir.path().join("queue"));
+            .env("CONES_CHECK_STATE_DIR", self.dir.path().join("queue"))
+            .env_remove("CONES_CHECK_CI")
+            .env_remove("RUST_TEST_THREADS");
         command
     }
 
@@ -61,6 +63,8 @@ impl Fixture {
             .arg("test")
             .envs(command.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))))
             .env("CONES_CHECK_STATE_DIR", queue)
+            .env_remove("CONES_CHECK_CI")
+            .env_remove("RUST_TEST_THREADS")
             .stdout(log.try_clone().unwrap())
             .stderr(log);
         // Keep the fixture cwd independent of whichever checkout starts the gate.
@@ -286,6 +290,45 @@ fn a_cancelled_waiter_never_starts_and_native_overrides_do_not_reach_tests() {
         .output()
         .unwrap();
     assert!(output.status.success());
+}
+
+#[test]
+fn ci_runs_tests_on_three_background_threads_and_a_backgrounded_gate_tests_normally() {
+    let fixture = Fixture::new(
+        r#"
+if [ "$2" != --no-run ]; then
+    python3 -c 'import os; print(os.getpriority(4, 0))' > "$TMPDIR/$1.priority"
+    echo "$RUST_TEST_THREADS" > "$TMPDIR/$1.threads"
+fi
+"#,
+    );
+    let read = |name: &str| fs::read_to_string(fixture.dir.path().join(name)).unwrap();
+    let output = fixture.run(&["ci"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(read("test.priority"), "1\n", "ci tests in the background");
+    assert_eq!(
+        read("test.threads"),
+        "3\n",
+        "ci uses the runner's three vCPUs"
+    );
+    // A gate started by a backgrounded agent still runs its tests at normal priority.
+    let mut background = Command::new("/usr/sbin/taskpolicy");
+    background.arg("-b").arg(fixture.command().get_program());
+    background.args(["test"]).current_dir(fixture.dir.path());
+    background.envs(
+        fixture
+            .command()
+            .get_envs()
+            .filter_map(|(k, v)| v.map(|v| (k, v))),
+    );
+    background.env_remove("CONES_CHECK_CI");
+    let output = background.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        read("test.priority"),
+        "0\n",
+        "test runs keep normal priority"
+    );
 }
 
 #[test]
