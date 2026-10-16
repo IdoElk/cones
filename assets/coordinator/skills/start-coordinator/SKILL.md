@@ -124,8 +124,9 @@ worktrees. Every command below is `cones coordinator`.
    introduction; repeating a greeting is a no-op. It goes through that harness's own delivery
    command, and a harness with none is refused rather than approximated. Either way the message
    spends the worker's time, and a sender label is attribution, not owner authority.
-5. A worker with no native way to reply answers by appending one JSON line to the folder's inbox;
-   `send` tells it the path and the shape. `cones coordinator --dir "$WB" mail` prints what is
+5. A worker you reached with `send` answers with `send` back to you, so its reply arrives as a
+   prompt; the note tells it the command. Only when that fails does it append one JSON line to
+   the folder's inbox, and the note gives that path and shape too. `cones coordinator --dir "$WB" mail` prints what is
    pending and consumes nothing, so a restarted or replaced coordinator sees replies the one
    before it never handled. `mail --ack N` records lines through N as handled, and only after you
    have acted on them. Reading is not handling.

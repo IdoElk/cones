@@ -18,8 +18,10 @@ harnesses' own records, so you can use it to reach beyond your own session.
    worker needs input, fails, leaves or answers. `cones comms --dir PATH send ID TEXT`, or your
    native SendMessage when you and the recipient are both Claude, which `send` refuses. The
    folder's roster is every live session in that folder or under it in the same repository,
-   whoever launched it; a separate project under it is not on it, and you need not be on it. Replies come back to that folder: `cones comms --dir PATH wait` blocks
-   until one lands, `mail` prints it, and `mail --ack N` marks it handled.
+   whoever launched it; a separate project under it is not on it, and you need not be on it. A reply comes back into your conversation, because the
+   note tells the recipient to `send` it to you. One that could not be sent lands in the folder's
+   inbox: `cones comms --dir PATH wait` blocks until one lands, `mail` prints it, and
+   `mail --ack N` marks it handled.
 3. **Start new work.** Launch a session in any folder on any enabled harness, the way the
    owner's dashboard does, and get its id back. `cones launch --dir PATH --harness NAME PROMPT`
    runs detached, needs no terminal and prints the id on stdout; give it the whole task as

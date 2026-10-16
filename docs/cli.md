@@ -344,8 +344,8 @@ cones comms --dir ~/src/app wait [--id SESSION_ID]... [--timeout SECONDS]
 
 | Command | Behavior |
 | --- | --- |
-| `send` | Deliver through the roster recipient's native [message operation](harness.md#message-delivery). Missing operations fail; `--greet` sends at most once per session. Notes identify their sender. A Claude sender writing to another Claude session is refused: SendMessage is its native channel. |
-| `mail` | Read pending replies. Only `--ack N` marks them handled. |
+| `send` | Deliver through the roster recipient's native [message operation](harness.md#message-delivery). Missing operations fail; `--greet` sends at most once per session. Notes identify their sender. A note from a session cones can place tells the recipient to answer with `send` to that session, so the reply arrives as a prompt; the sender's exact id is then a recipient in this folder even when it works outside it. A note from anywhere else is answered through the folder's inbox. A Claude sender writing to another Claude session is refused: SendMessage is its native channel. |
+| `mail` | Read pending replies, from workers that could not answer with `send`. Only `--ack N` marks them handled. |
 | `wait` | Block for new roster sessions or mail. With repeated `--id`, watch named workers for native input, failure or departure, plus mail. Unknown worker ids fail. |
 
 A Claude session that bypasses permission prompts holds notes for its user's approval; see
@@ -362,7 +362,7 @@ the inbox. [The wake loop](architecture.md#the-wake-loop) explains baseline and 
 ### State
 
 `STATE_DIR/coordinator/folders/<sha256 of absolute folder>` holds `status.json`, `inbox.jsonl`,
-`inbox.ack`, `wait.json`, `greeted.json`, `watcher.json` and `folder.lock`. State survives the
+`inbox.ack`, `wait.json`, `greeted.json`, `senders.json`, `watcher.json` and `folder.lock`. State survives the
 requesting session. Codex delivery requires the recipient home's daemon with `queue --thread`.
 
 ## Dispatching your own workers

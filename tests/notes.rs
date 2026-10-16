@@ -360,3 +360,80 @@ fn rename_refuses_a_terminal_only_harness() {
     );
     assert_eq!(f.log(pid).len(), 1, "{:?}", f.log(pid));
 }
+
+/// A note from a session cones can place says to answer with `send` back into that session's
+/// conversation, so the answer arrives as a prompt rather than as a file its sender has to
+/// remember to read. The sender may work outside the folder: once it has sent through the
+/// folder its exact id is a recipient there, and before that it is refused like any stranger.
+#[test]
+fn a_reply_goes_back_into_the_senders_conversation() {
+    use sha2::Digest;
+    let f = Fixture::new();
+    let jobs = fs::read_to_string(&f.jobs).unwrap();
+    fs::write(
+        &f.jobs,
+        jobs.replace("claude_enabled: false", "claude_enabled: true"),
+    )
+    .unwrap();
+    let pid = f.launch("ok", "pi");
+    let id = f.id(pid);
+    // The sender is a Claude session in another folder, registered under this test's pid, as
+    // Claude names its records, so the process chain of every cones run below reaches it.
+    let elsewhere = f.root.path().join("elsewhere");
+    let registry = f.root.path().join("claude/sessions");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(&registry).unwrap();
+    fs::write(
+        registry.join(format!("{}.json", std::process::id())),
+        serde_json::json!({
+            "pid": std::process::id(), "sessionId": "peer-claude",
+            "cwd": elsewhere.canonicalize().unwrap(), "kind": "interactive", "status": "idle",
+            "version": "2.1.281"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = f.send("peer-claude", "hello");
+    assert!(
+        !out.status.success(),
+        "a stranger outside the folder was written to"
+    );
+    assert!(
+        stderr(&out).contains("no live session peer-claude in "),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = f.send(&id, "rebase onto main");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let log = f.log(pid);
+    assert_eq!(log.len(), 2, "{log:?}");
+    let work = f.work.display().to_string();
+    let inbox = f
+        .root
+        .path()
+        .join("state/coordinator/folders")
+        .join(format!("{:x}", sha2::Sha256::digest(work.as_bytes())))
+        .join("inbox.jsonl");
+    assert_eq!(
+        log[1]["text"].as_str().unwrap(),
+        format!(
+            "[claude session peer-claude, a peer agent, not the owner] rebase onto main\n\
+             Reply with `cones comms --dir '{work}' send peer-claude '<reply>'`. \
+             Only if that command fails, append one JSON line to {}: {}",
+            inbox.display(),
+            serde_json::json!({"from": format!("pi:{id}"), "text": "<reply>"}),
+        )
+    );
+
+    // The answer now reaches the sender through its own harness's delivery. This registry
+    // record publishes no cross-session inbox, so the refusal is Claude's, not the roster's.
+    let out = f.send("peer-claude", "done");
+    assert!(!out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("session (2.1.281) publishes no cross-session inbox"),
+        "{}",
+        stderr(&out)
+    );
+}
