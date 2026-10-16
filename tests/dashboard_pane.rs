@@ -252,3 +252,50 @@ fn one_wheel_report_over_the_list_moves_the_selection_one_row() {
     );
     d.quit();
 }
+
+#[test]
+fn the_selected_folder_is_the_terminals_working_directory() {
+    let mut d = Dashboard::new("pane-osc7-dir", &[]);
+    let dirs: Vec<_> = ["a", "b c"]
+        .iter()
+        .map(|rel| {
+            fs::create_dir_all(d.path(rel)).unwrap();
+            d.path(rel).canonicalize().unwrap()
+        })
+        .collect();
+    d.open_folders(&dirs);
+    let url =
+        |dir: &std::path::Path| format!("file://localhost{}", dir.display()).replace(' ', "%20");
+    let urls: Vec<_> = dirs.iter().map(|dir| url(dir)).collect();
+    d.start();
+    let selected = |s: &str| s.lines().position(|l| l.starts_with('▌'));
+    let first = selected(&d.wait_for("a selected folder", |s| selected(s).is_some()));
+    let named = d.reported_dirs();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert!(urls.contains(&named[0]), "{named:?} names an open folder");
+    d.press("down", b"\x1b[B");
+    d.wait_for("the next folder", |s| selected(s) != first);
+    d.capture("moved");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while d.reported_dirs().len() < 2 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let named = d.reported_dirs();
+    assert_eq!(named.len(), 2, "{named:?}");
+    assert!(
+        urls.contains(&named[1]) && named[1] != named[0],
+        "{named:?}"
+    );
+    d.quit();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while d.reported_dirs().len() < 3 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let named = d.reported_dirs();
+    let own = url(&d.project().canonicalize().unwrap());
+    assert_eq!(
+        named.last(),
+        Some(&own),
+        "quitting names cones' folder: {named:?}"
+    );
+}

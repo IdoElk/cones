@@ -137,6 +137,29 @@ fn hand_back_tty() {
         }
     }
     reset_terminal_protocols();
+    if let Ok(dir) = std::env::current_dir() {
+        report_dir(&dir);
+    }
+}
+
+/// Name `dir` to the terminal around cones as its working directory, with OSC 7. Ghostty
+/// opens a relative path clicked in the frame, such as a `src/main.rs` a session printed,
+/// from that folder; `hand_back_tty` names cones' own again for the shell.
+fn report_dir(dir: &Path) {
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    let mut osc = String::from("\x1b]7;file://localhost");
+    for &b in dir.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            osc.push(b as char);
+        } else {
+            osc.push_str(&format!("%{b:02X}"));
+        }
+    }
+    osc.push_str("\x1b\\");
+    let mut out = std::io::stdout();
+    let _ = out.write_all(osc.as_bytes());
+    let _ = out.flush();
 }
 
 /// The signals that end the dashboard, as a flag its loop reads rather than a death it never sees.
@@ -9222,6 +9245,8 @@ struct App {
     /// The real terminal's default colors, probed once at start, for viewers that ask.
     colors: viewer::Colors,
     mouse_capture: bool,
+    /// The folder last named to the terminal with OSC 7: the selected row's.
+    reported_dir: Option<PathBuf>,
     /// Set by the release-the-mouse key: no reports at all, so the terminal selects.
     mouse_off: bool,
     /// Where the left button went down: the region and the cell a drag would start from.
@@ -9629,6 +9654,7 @@ impl App {
             focus: None,
             colors: viewer::Colors::default(),
             mouse_capture: false,
+            reported_dir: None,
             mouse_off: false,
             drag_from: None,
             drawn: ratatui::buffer::Buffer::default(),
@@ -17623,6 +17649,11 @@ pub fn run(
                         execute!(std::io::stdout(), DisableMouseCapture)?;
                     }
                     app.mouse_capture = wants_mouse;
+                }
+                let dir = app.target_dir();
+                if app.reported_dir.as_ref() != Some(&dir) {
+                    report_dir(&dir);
+                    app.reported_dir = Some(dir);
                 }
                 if redraw
                     || dirty

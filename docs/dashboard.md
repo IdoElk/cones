@@ -336,9 +336,13 @@ divider between list and pane moves it instead; a short heavy grip follows the p
 along the divider, the whole divider lights up while dragged, the pane keeps 30 to 70 percent of the frame, its viewer is resized as for a terminal resize,
 and the release saves the share as [`pane.ratio`](jobs.md#pane). `alt+m` hands the
 mouse to the terminal, for a selection that crosses regions, and takes it back. A link a
-client prints with OSC 8, as Claude Code does for URLs and files, reaches the terminal
-around cones, which opens it on its own link click, such as cmd+click. See
-[diagnostics](cli.md#diagnostics) for delays.
+client prints with OSC 8 reaches the terminal around cones, which opens it on its own link
+click. While cones reads the mouse, Ghostty takes that click only with shift added, as
+cmd+shift+click, or after `alt+m`. Cones names the selected row's folder to the terminal as
+its working directory with OSC 7, so a relative path a session printed as plain text, such
+as `src/main.rs`, opens from that folder; Ghostty reads a `:line` suffix as part of the file
+name. Quitting names cones' own folder again. See [diagnostics](cli.md#diagnostics) for
+delays.
 
 ## Composer
 

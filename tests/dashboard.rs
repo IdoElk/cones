@@ -46,6 +46,8 @@ pub struct Dashboard {
     child: Option<Child>,
     master: Option<std::fs::File>,
     screen: Arc<Mutex<vt100::Parser>>,
+    /// Every byte the dashboard wrote, for escapes the screen does not keep.
+    output: Arc<Mutex<Vec<u8>>>,
     artifact: PathBuf,
     shots: usize,
     keys: String,
@@ -88,6 +90,7 @@ impl Dashboard {
             child: None,
             master: None,
             screen: Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0))),
+            output: Arc::default(),
             artifact,
             shots: 0,
             keys: String::new(),
@@ -189,6 +192,7 @@ impl Dashboard {
         let master = unsafe { std::fs::File::from_raw_fd(master) };
         let mut reader = master.try_clone().unwrap();
         let screen = self.screen.clone();
+        let output = self.output.clone();
         std::thread::spawn(move || {
             let mut buf = [0; 65536];
             while let Ok(n) = reader.read(&mut buf) {
@@ -196,6 +200,7 @@ impl Dashboard {
                     break;
                 }
                 screen.lock().unwrap().process(&buf[..n]);
+                output.lock().unwrap().extend_from_slice(&buf[..n]);
             }
         });
         self.child = Some(child);
@@ -224,6 +229,16 @@ impl Dashboard {
         let cell = self.cell_of(text)?;
         let parser = self.screen.lock().unwrap();
         parser.screen().link(cell.link()).map(|url| url.to_string())
+    }
+
+    /// Every OSC 7 working directory the dashboard named, in order, as `file://` URLs.
+    pub fn reported_dirs(&self) -> Vec<String> {
+        let output = self.output.lock().unwrap();
+        let text = String::from_utf8_lossy(&output);
+        text.split("\x1b]7;")
+            .skip(1)
+            .filter_map(|rest| rest.split_once("\x1b\\").map(|(url, _)| url.to_owned()))
+            .collect()
     }
 
     /// The first cell of the first `text` on the screen.
