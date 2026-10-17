@@ -92,7 +92,9 @@ ListAgents gives you, and any other worker runs
 `$CLAUDE_CODE_SESSION_ID` or `$CODEX_THREAD_ID`, or your row in `cones ls --json`. A worker
 that crashes, stops to ask for input or forgets sends nothing, so also launch it with
 `cones launch --wait ...` as a background task: that command exits when the harness reports
-the worker stopped, and its exit wakes you. Then read the worker's report.
+the worker stopped, and its exit wakes you. For a worker already running, after you send it
+more work, `cones wait ID...` as a background task does the same. Then read the worker's
+report.
 
 **The report asks for:** the native session id, worktree and branch, the result or the blocker
 with what is missing, changed files, checks run and what they said, and the commit hash.

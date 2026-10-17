@@ -194,6 +194,17 @@ enum Action {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
         id: String,
     },
+    /// Block until one of the sessions stops moving on its own, and print `ID<TAB>STATE`. Run
+    /// it as a background task, so its exit wakes you; see docs/cli.md.
+    Wait {
+        /// Session ids as `cones ls` prints them, a job's session included.
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// Give up after this many seconds, fractions allowed, and exit 2. It does not limit or
+        /// stop any session.
+        #[arg(long, value_parser = seconds)]
+        timeout: Option<std::time::Duration>,
+    },
     /// One note to any live session, through its own harness's delivery; see docs/cli.md.
     Send {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
@@ -684,15 +695,12 @@ fn execute(cli: Cli) -> Result<i32> {
             println!("{}", started.id);
             if let Some(name) = name.filter(|_| !flag) {
                 // The session is running whatever happens here, so its id is out first.
-                let session = cones::tui::fleet_rows(
-                    &claude,
-                    &state,
-                    &Ledger::new(&state)?.runs()?,
-                    &config::defaults(&jobs_path),
-                )?
-                .into_iter()
-                .find(|s| s.session_id == started.id)
-                .with_context(|| format!("{} is not on the roster yet to be named", started.id))?;
+                let session = cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?
+                    .into_iter()
+                    .find(|s| s.session_id == started.id)
+                    .with_context(|| {
+                        format!("{} is not on the roster yet to be named", started.id)
+                    })?;
                 harness::rename(
                     &session,
                     &harness::home_of(&session, &claude),
@@ -704,12 +712,12 @@ fn execute(cli: Cli) -> Result<i32> {
             if wait {
                 use std::io::Write;
                 std::io::stdout().flush()?;
-                match cones::launch::wait_until_stopped(
+                match cones::launch::wait(
                     &state,
                     &claude,
                     &jobs_path,
-                    &started.id,
-                    since,
+                    std::slice::from_ref(&started.id),
+                    Some(since),
                     timeout,
                 )? {
                     Some(settled) => print!("{settled}"),
@@ -831,8 +839,7 @@ fn execute(cli: Cli) -> Result<i32> {
         Action::Resume { id } => {
             let entry = cones::show::entry(&claude, &id)?;
             let policy = config::defaults(&jobs_path);
-            let rows =
-                cones::tui::fleet_rows(&claude, &state, &Ledger::new(&state)?.runs()?, &policy)?;
+            let rows = cones::tui::sessions(&claude, &state, &policy)?;
             let started = cones::launch::resume(&state, &policy, &entry, &rows)?;
             eprintln!("{} running detached", started.harness);
             println!("{}", started.id);
@@ -852,12 +859,7 @@ fn execute(cli: Cli) -> Result<i32> {
         }
         Action::Stop { id } => {
             let rows = if id.len() >= 4 {
-                cones::tui::fleet_rows(
-                    &claude,
-                    &state,
-                    &Ledger::new(&state)?.runs()?,
-                    &config::defaults(&jobs_path),
-                )?
+                cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?
             } else {
                 Vec::new()
             };
@@ -866,13 +868,18 @@ fn execute(cli: Cli) -> Result<i32> {
             print!("{}", cones::stop::session(&state, &claude, &id)?);
             Ok(0)
         }
+        Action::Wait { ids, timeout } => {
+            match cones::launch::wait(&state, &claude, &jobs_path, &ids, None, timeout)? {
+                Some(settled) => print!("{settled}"),
+                None => {
+                    println!("timeout");
+                    return Ok(2);
+                }
+            }
+            Ok(0)
+        }
         Action::Send { id, text } => {
-            let rows = cones::tui::fleet_rows(
-                &claude,
-                &state,
-                &Ledger::new(&state)?.runs()?,
-                &config::defaults(&jobs_path),
-            )?;
+            let rows = cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?;
             let ids = rows.iter().map(|s| s.session_id.clone());
             let id = if id.len() >= 4 {
                 by_prefix(ids, &id)?
@@ -886,12 +893,7 @@ fn execute(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Action::Rename { id, name } => {
-            let rows = cones::tui::fleet_rows(
-                &claude,
-                &state,
-                &Ledger::new(&state)?.runs()?,
-                &config::defaults(&jobs_path),
-            )?;
+            let rows = cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?;
             let ids = rows.iter().map(|s| s.session_id.clone());
             let id = if id.len() >= 4 {
                 by_prefix(ids, &id)?
@@ -947,8 +949,7 @@ fn execute(cli: Cli) -> Result<i32> {
                 println!("closed {target}; the folder itself and any pin are untouched");
                 return Ok(0);
             }
-            let rows =
-                cones::tui::fleet_rows(&claude, &state, &runs, &config::defaults(&jobs_path))?;
+            let rows = cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?;
             let ids = rows
                 .iter()
                 .map(|s| s.session_id.clone())

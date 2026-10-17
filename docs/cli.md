@@ -34,6 +34,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones index [status] [--timeout SECS] [--json]` | [Build the meaning index](#building-the-meaning-index) with progress, or report it. |
 | `cones show ID [--tail N] [--all] [--json]` | [Read a session's conversation](#reading-a-conversation). |
 | `cones mcp` | Serve [history tools over MCP stdio](#history-over-mcp). |
+| `cones wait ID... [--timeout S]` | [Block until a session settles](#waiting-on-a-session) and print `ID<TAB>STATE`. |
 | `cones send ID TEXT` | [Send one note](#sending-a-note) to a live session in any folder. |
 | `cones rename ID NAME` | [Name a session](#renaming-a-session) through its harness's own rename, as the dashboard's `ctrl+n` does. |
 | `cones stop ID` | [Stop a session](#stopping-a-session) and keep its conversation. |
@@ -270,6 +271,22 @@ open it later. Neither takes a prompt; `cones comms send` gives the session work
   parent is recorded and the dashboard lists it under that parent. A harness with no verified
   native fork is refused. Codex forks are named only in the dashboard, so `cones fork`
   refuses them.
+
+### Waiting on a session
+
+```sh
+cones wait 5bf8392e-17cb-405d-a400-22dfbda13472 0199f2a4-7c1e-7000-8000-00000000a11d
+```
+
+Blocks until one of the named live sessions is not working: its turn ended, it asks for input,
+it failed or stopped, or it left the roster. It then prints `ID<TAB>STATE` for that session.
+A session already settled answers at once. An id that is not live on the first look is
+refused. Ids are exact, as `cones ls` prints them; a job's session counts, though `ls` shows
+it as its run. A session whose harness reports no state reads as working and never settles.
+`--timeout S` gives up after S seconds and exits 2 with `timeout`, leaving every session
+running. An agent runs it as a background task, so the exit wakes it; the state says where to
+look, not that the task is done. `launch --wait` uses the same watch, but ignores a state
+reported before the new session's first turn.
 
 ### Sending a note
 

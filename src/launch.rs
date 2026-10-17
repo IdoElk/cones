@@ -749,46 +749,57 @@ fn recovery(state: &Path, event: &str, data: Value) {
     }
 }
 
-/// Block until the harness reports that `id` stopped moving on its own, and say how: its
-/// turn ended, it asks for input, it failed or stopped, or it left the roster. The caller runs
-/// this as a background task, so its exit is what wakes the caller; nothing is injected into
-/// either session. A state reported before the first turn is not an end: the session has to
-/// have been seen working, or have written after `since`, the moment it was launched. `None`
-/// is the timeout.
+/// Block until the harness reports that one of `ids` stopped moving on its own, and say which
+/// and how: its turn ended, it asks for input, it failed or stopped, or it left the roster. The
+/// caller runs this as a background task, so its exit is what wakes the caller; nothing is
+/// injected into any session. With `since`, the moment a session was launched, a state
+/// reported before its first turn is not an end: it has to have been seen working, or have
+/// written after `since`. Without it, a session already settled answers at once, and an id
+/// not live on the first look is an error. `None` is the timeout. A job's session is watched
+/// like any other.
 // ponytail: matches the row's session or native id; a pi row keyed by its process until the
 // session file appears can read as gone, so watch the native id `cones ls` shows by then.
-pub fn wait_until_stopped(
+pub fn wait(
     state: &Path,
     claude: &Path,
     jobs: &Path,
-    id: &str,
-    since: chrono::DateTime<chrono::Utc>,
+    ids: &[String],
+    since: Option<chrono::DateTime<chrono::Utc>>,
     timeout: Option<Duration>,
 ) -> Result<Option<String>> {
     let deadline = timeout.map(|t| Instant::now() + t);
-    let (mut seen, mut moved, mut failures) = (false, false, 0);
+    let mut seen = vec![false; ids.len()];
+    let mut moved = vec![since.is_none(); ids.len()];
+    let (mut first, mut failures) = (true, 0);
     loop {
-        let rows = Ledger::new(state)?.runs().and_then(|runs| {
-            crate::tui::fleet_rows(claude, state, &runs, &crate::config::defaults(jobs))
-        });
-        match rows {
+        match crate::tui::sessions(claude, state, &crate::config::defaults(jobs)) {
             Ok(rows) => {
                 failures = 0;
-                match rows
-                    .iter()
-                    .find(|s| s.session_id == id || s.native_id.as_deref() == Some(id))
-                {
-                    None if seen => return Ok(Some(format!("{id}\tgone\n"))),
-                    None => {}
-                    Some(row) => {
-                        seen = true;
-                        let busy = matches!(row.state.as_str(), "working" | "active" | "-" | "");
-                        moved |= busy || row.last_activity.is_some_and(|at| at >= since);
-                        if moved && !busy {
-                            return Ok(Some(format!("{id}\t{}\n", row.state)));
+                for (i, id) in ids.iter().enumerate() {
+                    let row = rows
+                        .iter()
+                        .find(|s| s.session_id == *id || s.native_id.as_deref() == Some(id));
+                    match row {
+                        None if seen[i] => return Ok(Some(format!("{id}\tgone\n"))),
+                        None => ensure!(
+                            !first || since.is_some(),
+                            "no live session {id}; `cones ls` lists them"
+                        ),
+                        Some(row) => {
+                            seen[i] = true;
+                            let busy =
+                                matches!(row.state.as_str(), "working" | "active" | "-" | "");
+                            moved[i] |= busy
+                                || since.is_some_and(|since| {
+                                    row.last_activity.is_some_and(|at| at >= since)
+                                });
+                            if moved[i] && !busy {
+                                return Ok(Some(format!("{id}\t{}\n", row.state)));
+                            }
                         }
                     }
                 }
+                first = false;
             }
             // A registry can be mid-rewrite; an hour of failures is a broken install.
             Err(e) => {

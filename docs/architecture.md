@@ -31,11 +31,13 @@ Every verb below is a `cones` command, open to any agent with a shell.
 | Launch | `launch` | Detached; prints the id |
 | Resume, fork | `resume`, `fork` | Detached; prints the id |
 | Message | `send` | Through the harness's `message` |
+| Wait | `wait` | Until a session settles |
 | Rename | `rename` | The harness's own rename |
 | Stop | `stop` | Keeps the conversation |
 | Remove | `rm` | Also closes jobs and folders |
 
-The dashboard and the commands build the same native commands. The dashboard opens resumes
+The verbs read every live session, a job's included. `ls` and the dashboard show a job's
+session as its run row instead. The dashboard and the commands build the same native commands. The dashboard opens resumes
 and forks in its own pane; the commands host them detached. The
 [command reference](cli.md) has each verb's flags and output.
 

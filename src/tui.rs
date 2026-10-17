@@ -3270,6 +3270,12 @@ fn named_cell(rows: &[Row], i: usize) -> usize {
         .map_or(usize::MAX, |n| n + 1)
 }
 
+/// Every live session, a job's included: the control plane's read, which the verbs act on.
+/// `ls` and the dashboard show a job's session as its run instead, through [`fleet_rows`].
+pub fn sessions(claude: &Path, state: &Path, offered: &config::Policy) -> Result<Vec<Session>> {
+    fleet_rows(claude, state, &[], offered)
+}
+
 /// Sessions from Claude's registry and Codex's process table, oldest first. Sessions belonging
 /// to a ledger run collapse into that run's row. A harness config does not offer is not scanned.
 pub fn fleet_rows(

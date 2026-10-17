@@ -1236,3 +1236,84 @@ fn a_fork_of_a_harness_with_no_native_fork_is_refused_before_anything_starts() {
     );
     assert!(f.hosted_pids().is_empty());
 }
+
+/// `cones wait` watches sessions it did not launch, a job's session included, which `ls` shows
+/// as its run instead. A settled session answers at once, a working one when it settles, and
+/// an id that is not live is refused rather than waited on forever.
+#[test]
+fn wait_returns_when_a_named_session_settles_including_a_job_s() {
+    use cones::ledger::{Ledger, Record, Status};
+    let f = Fixture::new();
+    let out = f.cones("ok", &["wait", "nobody-here"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("no live session nobody-here"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = f.launch("ok", "claude", "port the risk experiment");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = stdout(&out);
+    // The session belongs to a job's run: `ls` lists the run, the verbs still reach the session.
+    let mut started = Record::new("run-wait-0001".into(), Status::Started);
+    started.job = Some("nightly".into());
+    started.session_id = Some(id.clone());
+    started.cwd = Some(f.work.clone());
+    Ledger::new(&f.state()).unwrap().append(&started).unwrap();
+    assert!(
+        !f.rows()
+            .iter()
+            .any(|r| r["session"]["session_id"] == id.as_str()),
+        "{:?}",
+        f.rows()
+    );
+
+    let out = f.cones("ok", &["wait", &id]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{id}\tidle"));
+    // One unknown id among several refuses the wait too.
+    let out = f.cones("ok", &["wait", "nobody-yet", &id]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+
+    let record = f.path().join("claude/sessions").join(format!("{id}.json"));
+    let set = |status: &str| {
+        let mut entry: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        entry["status"] = status.into();
+        fs::write(&record, entry.to_string()).unwrap();
+    };
+    set("busy");
+    let out = f.cones("ok", &["wait", &id, "--timeout", "0.5"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "timeout");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cones"))
+        .args([
+            "--jobs",
+            f.jobs.to_str().unwrap(),
+            "--state-dir",
+            f.state().to_str().unwrap(),
+            "wait",
+            &id,
+            "--timeout",
+            "30",
+        ])
+        .env("HOME", f.path())
+        .env("CONES_TEST_FAST", "1")
+        .env("CLAUDE_CONFIG_DIR", f.path().join("claude"))
+        .env("PI_CODING_AGENT_DIR", f.path().join("pi"))
+        .env("CODEX_HOME", f.codex_home())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "a working session ended the wait"
+    );
+    set("idle");
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{id}\tidle"));
+}
