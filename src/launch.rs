@@ -154,18 +154,7 @@ fn background(
     dir: &Path,
     mut command: std::process::Command,
 ) -> Result<Launched> {
-    let out = command
-        .stdin(std::process::Stdio::null())
-        .output()
-        .with_context(|| format!("start {kind}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    ensure!(
-        out.status.success(),
-        "{kind} exited {}: {}",
-        out.status.code().unwrap_or(-1),
-        first_line(&stderr).unwrap_or("no error output")
-    );
+    let stdout = start_background(kind, &mut command)?;
     let short = background_id(&stdout).with_context(|| {
         format!(
             "{kind} started but printed no background id: {}",
@@ -198,6 +187,27 @@ fn background(
         harness: name,
         pid: row.pid,
     })
+}
+
+/// Run a background start and return what it printed, which carries the background id. The
+/// one start both `cones launch` and the dashboard's composer use; each names the session its
+/// own way afterwards.
+pub fn start_background(kind: HarnessKind, command: &mut std::process::Command) -> Result<String> {
+    let out = command
+        .stdin(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("start {kind}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    ensure!(
+        out.status.success(),
+        "{kind} exited {}: {}",
+        out.status.code().unwrap_or(-1),
+        match stderr.trim() {
+            "" => "no error output",
+            said => said,
+        }
+    );
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// A terminal harness is its own client, so detaching it means giving it a terminal that is

@@ -14613,24 +14613,15 @@ impl App {
                 };
                 preparation_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
                 let executing = Instant::now();
-                let output = command.stdin(Stdio::null()).output();
+                let output = crate::launch::start_background(kind, &mut command);
                 command_ms = Some(executing.elapsed().as_secs_f64() * 1000.0);
-                let output = output?;
-                if !output.status.success()
-                    && String::from_utf8_lossy(&output.stderr)
-                        .contains(harness::UNTRUSTED_WORKSPACE)
+                if output
+                    .as_ref()
+                    .is_err_and(|e| format!("{e:#}").contains(harness::UNTRUSTED_WORKSPACE))
                 {
                     foreground = Some(harness::foreground(&command));
                 }
-                anyhow::ensure!(
-                    output.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-                Ok(format!(
-                    "started {what}: {}",
-                    uncolored(String::from_utf8_lossy(&output.stdout).trim())
-                ))
+                Ok(format!("started {what}: {}", uncolored(output?.trim())))
             })();
             if let Some(log) = log {
                 log.event(
