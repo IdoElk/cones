@@ -102,6 +102,16 @@ operations:
       contains: ["--thread", "--message"]
       error: "this codex has no `queue --thread`, so a coordinator could not deliver a note to a thread"
       description: "codex: queue one note to a live thread"
+  btw:
+    # An ephemeral headless fork in the read-only sandbox, which writes no rollout. `--sandbox`
+    # belongs to `exec`, not to `fork`. Verified against 0.163.0.
+    args: [exec, --sandbox, read-only, fork, --ephemeral, --skip-git-repo-check, --output-last-message, "{answer}", --, "{id}", "{text}"]
+    probe:
+      args: [exec, --help]
+      contains: [fork, --sandbox, --ephemeral, --output-last-message]
+      error: "this codex has no ephemeral `exec fork`, so a side question would leave a thread behind"
+      description: "codex: side questions in a read-only fork it does not save"
+  compact: true
   unarchive:
     args: [unarchive, --, "{id}"]
   sessions:

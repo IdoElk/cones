@@ -284,6 +284,43 @@ fn rename_names_an_owned_pi_and_opencode_through_their_own_call() {
     assert_eq!(f.inbox_leftovers(), Vec::<PathBuf>::new());
 }
 
+/// `cones compact` compacts a pi or OpenCode client cones owns through the call the harness's
+/// own `/compact` makes, pi's `compact` and OpenCode's `session.summarize` on the model of the
+/// session's last reply, and returns only once the harness reports it done. A compaction the
+/// harness reports failed fails the command with the harness's words.
+#[test]
+fn compact_compacts_an_owned_pi_and_opencode_through_their_own_call() {
+    let f = Fixture::new();
+    for harness in ["pi", "opencode"] {
+        let pid = f.launch("ok", harness);
+        let id = f.id(pid);
+        let out = f.cones("ok", &["compact", &id]);
+        assert!(out.status.success(), "{harness}: {}", stderr(&out));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("compacted {id} ({harness})\n")
+        );
+        let log = f.log(pid);
+        assert_eq!(log.len(), 2, "{harness} was handed {log:?}");
+        let want = match harness {
+            "pi" => serde_json::json!({"compact": true}),
+            _ => serde_json::json!({"summarize": {"sessionID": log[0]["session"],
+                "providerID": "fixture-provider", "modelID": "fixture-model"}}),
+        };
+        assert_eq!(log[1], want);
+    }
+    let pid = f.launch("uncompactable", "pi");
+    let id = f.id(pid);
+    let out = f.cones("uncompactable", &["compact", &id]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("pi refused the note: Nothing to compact"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(f.inbox_leftovers(), Vec::<PathBuf>::new());
+}
+
 /// `cones launch --name` uses pi's own `--name`; OpenCode has no such flag, so the launch
 /// renames the client once it is on the roster. A terminal-only harness keeps no name and the
 /// launch is refused before anything starts.

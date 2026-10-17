@@ -814,7 +814,12 @@ pub fn message(
             return peer_inbox_send(session, home, text, &peer_inbox.protocols);
         }
         spec::Message::Reporter { .. } => {
-            return reporter_send(session, state, serde_json::json!({"text": text}));
+            return reporter_send(
+                session,
+                state,
+                serde_json::json!({"text": text}),
+                std::time::Duration::ZERO,
+            );
         }
         spec::Message::Unavailable { unavailable } => {
             bail!("a note cannot reach {}: {unavailable}", spec.name)
@@ -898,6 +903,7 @@ pub fn rename(
                 &format!("/rename {name}"),
                 &spec.input,
                 applied,
+                std::time::Duration::from_secs(20),
             )
             .with_context(|| format!("renaming {}", session.session_id))
         }
@@ -910,8 +916,273 @@ pub fn rename(
             crate::codex::control::rename(home, &session.session_id, name)
                 .with_context(|| format!("renaming {}", session.session_id))
         }
-        _ => reporter_send(session, state, serde_json::json!({"name": name})),
+        _ => reporter_send(
+            session,
+            state,
+            serde_json::json!({"name": name}),
+            std::time::Duration::ZERO,
+        ),
     }
+}
+
+/// How long a harness has to finish a compaction it has started. A compaction is a model call
+/// over the whole conversation; Claude Code took 67 seconds over 220k tokens.
+const COMPACT_WITHIN: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Compact a live session's context the way its harness's own `/compact` does, and return once
+/// the harness reports the compaction done.
+///
+/// A Claude background session takes `/compact` in a client opened only for it, as `rename`
+/// does, and is done when its transcript records a `compact_boundary`. Codex compacts the
+/// thread through its daemon's `thread/compact/start`. A pi or OpenCode client cones owns
+/// compacts through the reporter: pi's `compact`, OpenCode's `session.summarize`. A session
+/// whose turn is running is refused, since every harness's own command waits for the turn.
+pub fn compact(session: &crate::fleet::Session, home: &Path, state: &Path) -> Result<()> {
+    let spec = by_name(&session.harness).context("unknown session harness")?;
+    let id = &session.session_id;
+    ensure!(
+        spec.operations.compact,
+        "{} has no compaction cones can start",
+        spec.name
+    );
+    ensure!(
+        !matches!(session.state.as_str(), "working" | "active"),
+        "{id} is working; compact it once its turn ends, which `cones wait {id}` reports"
+    );
+    match spec.kind {
+        HarnessKind::Claude if spec.session(session.kind.as_deref()).join == spec::Join::Attach => {
+            let transcript = session
+                .transcript_path
+                .clone()
+                .context("this Claude session reports no transcript to see the compaction in")?;
+            crate::viewer::submit_command(
+                join(session, home, false)?,
+                "/compact",
+                &spec.input,
+                crate::fleet::compaction_after(&transcript),
+                COMPACT_WITHIN,
+            )
+            .with_context(|| format!("compacting {id}"))
+        }
+        HarnessKind::Claude => bail!(
+            "{} session {id} runs in a terminal cones cannot join, so only its own /compact \
+             can compact it",
+            spec.name
+        ),
+        HarnessKind::Codex => {
+            let codex = executable("codex", &launch_path())
+                .ok_or_else(|| anyhow::anyhow!("codex not found on the launch PATH"))?;
+            codex_remote(&codex, home)?;
+            crate::codex::control::compact(home, id, COMPACT_WITHIN)
+                .with_context(|| format!("compacting {id}"))
+        }
+        _ => reporter_send(
+            session,
+            state,
+            serde_json::json!({"compact": true}),
+            COMPACT_WITHIN,
+        )
+        .with_context(|| format!("compacting {id}")),
+    }
+}
+
+/// Ask the conversation `entry` names one question in a fork of it, and return the answer, or
+/// `None` when `timeout` passed first. The original conversation is never written to.
+///
+/// The fork is the harness's own, run headless under its own read-only setting: Claude's plan
+/// mode, Codex's read-only sandbox, pi's read-only tools and OpenCode's plan agent. cones adds
+/// no permission flag of its own and never the owner's skip-permissions one. None of it is
+/// kept: Claude and Codex save nothing, pi saves into a directory cones removes, and OpenCode's
+/// fork is deleted by the id its own events report. `model` overrides the configured default;
+/// a fork on another model than the conversation's reads its whole context without the cache.
+pub fn btw(
+    entry: &crate::history::Entry,
+    policy: &Policy,
+    question: &str,
+    model: Option<&str>,
+    timeout: Option<std::time::Duration>,
+) -> Result<Option<String>> {
+    ensure!(!question.trim().is_empty(), "a question is needed");
+    let mut entry = entry.clone();
+    if entry.key.harness == "opencode" {
+        entry.transcript = crate::opencode::session_database(
+            &entry.key.home,
+            &entry.key.session_id,
+            &entry.cwd,
+            (!entry.transcript.as_os_str().is_empty()).then_some(entry.transcript.as_path()),
+        )?;
+    }
+    ensure!(entry.cwd.is_dir(), "the session folder no longer exists");
+    ensure!(
+        entry.transcript.is_file(),
+        "the conversation's transcript no longer exists"
+    );
+    ensure!(
+        !entry.archived,
+        "resume an archived session before asking it anything"
+    );
+    let spec = by_name(&entry.key.harness).context("unknown harness")?;
+    let kind = spec.kind;
+    let operation = spec.operations.btw.as_ref().with_context(|| {
+        format!(
+            "{} has no verified read-only fork that keeps nothing, so it cannot be asked a side \
+             question",
+            spec.name
+        )
+    })?;
+    if let Some(probe) = &operation.probe {
+        probe_harness(kind, probe)?;
+    }
+    let scratch = tempfile::Builder::new().prefix("cones-btw-").tempdir()?;
+    let answer = scratch.path().join("answer");
+    let mut flags = Vec::new();
+    if let Some(launch) = &spec.launch {
+        for (flag, value) in [
+            (&launch.model, model.or(policy.model_for(kind))),
+            (&launch.provider, policy.provider_for(kind)),
+            (&launch.effort, policy.effort_for(kind)),
+        ] {
+            if let (Some(flag), Some(value)) = (flag, value) {
+                flags.extend([flag.clone(), value.to_owned()]);
+            }
+        }
+    }
+    let path = executable(&spec.name, &launch_path())
+        .with_context(|| format!("{} not found", spec.name))?;
+    let mut command = std::process::Command::new(path);
+    command
+        .args(spec::args(
+            &with_flags(&operation.args, &flags),
+            &[
+                ("id", entry.key.session_id.as_ref()),
+                ("transcript", entry.transcript.as_os_str()),
+                ("text", question.as_ref()),
+                ("scratch", scratch.path().as_os_str()),
+                ("answer", answer.as_os_str()),
+            ],
+        )?)
+        .current_dir(&entry.cwd);
+    spec.home.set_command_home(&mut command, &entry.key.home);
+    if kind == HarnessKind::Opencode {
+        crate::opencode::require_session(&entry.transcript, &entry.key.session_id)?;
+        command.env("OPENCODE_DB", &entry.transcript);
+    }
+    if let Some(launch) = &spec.launch {
+        provider_env(
+            &mut command,
+            launch,
+            policy.bedrock,
+            policy.aws_profile.as_deref(),
+            policy.aws_region.as_deref(),
+        );
+    }
+    folder_env(&mut command);
+    drop_host_identity(&mut command);
+    let (out, finished) =
+        bounded(command, timeout).with_context(|| format!("asking {}", spec.name))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let said = || {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        match stderr.trim().lines().last() {
+            Some(line) => line.to_owned(),
+            None => format!("it exited {}", out.status),
+        }
+    };
+    if kind == HarnessKind::Opencode {
+        // Deleted first, whatever came back: an answer cones failed to read is still a fork.
+        crate::opencode::delete_fork(&entry, &stdout)?;
+    }
+    if !finished {
+        return Ok(None);
+    }
+    let text = match kind {
+        HarnessKind::Claude => {
+            let report: Value = serde_json::from_str(stdout.trim())
+                .with_context(|| format!("claude reported no answer: {}", said()))?;
+            let result = report["result"].as_str().unwrap_or_default().to_owned();
+            ensure!(
+                report["is_error"] != true && out.status.success(),
+                "claude could not answer: {}",
+                if result.is_empty() { said() } else { result }
+            );
+            result
+        }
+        HarnessKind::Codex => {
+            ensure!(out.status.success(), "codex could not answer: {}", said());
+            std::fs::read_to_string(&answer).context("codex wrote no answer")?
+        }
+        HarnessKind::Opencode => {
+            ensure!(
+                out.status.success(),
+                "opencode could not answer: {}",
+                said()
+            );
+            crate::opencode::answer(&stdout)?
+        }
+        _ => {
+            ensure!(
+                out.status.success(),
+                "{} could not answer: {}",
+                spec.name,
+                said()
+            );
+            stdout.into_owned()
+        }
+    };
+    let text = text.trim();
+    ensure!(!text.is_empty(), "{} answered with nothing", spec.name);
+    Ok(Some(text.to_owned()))
+}
+
+/// Run `command` to its end, or until `timeout`, and say which. Past the timeout its process
+/// group is ended, so a harness's own children go with it, and what it printed is kept.
+fn bounded(
+    mut command: std::process::Command,
+    timeout: Option<std::time::Duration>,
+) -> Result<(std::process::Output, bool)> {
+    use std::{io::Read, os::unix::process::CommandExt, process::Stdio};
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            bytes
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().expect("piped")));
+    let stderr = drain(Box::new(child.stderr.take().expect("piped")));
+    let deadline = timeout.map(|t| std::time::Instant::now() + t);
+    let (status, finished) = loop {
+        if let Some(status) = child.try_wait()? {
+            break (status, true);
+        }
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            let group = -(child.id() as i32);
+            unsafe { libc::kill(group, libc::SIGTERM) };
+            let grace = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while child.try_wait()?.is_none() && std::time::Instant::now() < grace {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            unsafe { libc::kill(group, libc::SIGKILL) };
+            break (child.wait()?, false);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    // A child the harness left behind would hold the pipes open; the run is over.
+    if finished {
+        unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
+    }
+    let output = std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    };
+    Ok((output, finished))
 }
 
 /// Hand one note to the reporter cones loaded into a pi or OpenCode client it owns, which
@@ -919,7 +1190,12 @@ pub fn rename(
 /// running turn. The note goes to the conversation the client shows, since a `client_pid` row
 /// is its process. The reporter answers every note, so a client that never loaded it, or that
 /// shows no conversation, is an error here and not a note left lying in a directory.
-fn reporter_send(session: &crate::fleet::Session, state: &Path, body: Value) -> Result<()> {
+fn reporter_send(
+    session: &crate::fleet::Session,
+    state: &Path,
+    body: Value,
+    answer_within: std::time::Duration,
+) -> Result<()> {
     use std::time::{Duration, Instant};
     let (name, id) = (&session.harness, &session.session_id);
     let records = crate::terminal_host::records(state);
@@ -943,23 +1219,28 @@ fn reporter_send(session: &crate::fleet::Session, state: &Path, body: Value) -> 
     let (pending, reply) = (note.with_extension("tmp"), note.with_extension("done"));
     std::fs::write(&pending, body.to_string())?;
     std::fs::rename(&pending, &note)?;
-    // The reporter looks four times a second.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // The reporter looks four times a second and takes a note by deleting it. It answers once
+    // the harness's call returns, which for a compaction is once the compaction is done.
+    let started = Instant::now();
+    let pickup = Duration::from_secs(5);
     let answer: Value = loop {
         if let Ok(bytes) = std::fs::read(&reply) {
             let _ = std::fs::remove_file(&reply);
             break serde_json::from_slice(&bytes)?;
         }
-        if Instant::now() >= deadline {
+        if started.elapsed() >= pickup && note.exists() {
             // Withdrawn, so a reporter that wakes later cannot deliver a note reported as lost.
-            let withdrawn = std::fs::remove_file(&note).is_ok();
+            if std::fs::remove_file(&note).is_ok() {
+                bail!(
+                    "the cones reporter in {name} session {id} is not answering, so the note was withdrawn"
+                );
+            }
+        }
+        if started.elapsed() >= pickup + answer_within {
             bail!(
-                "the cones reporter in {name} session {id} {}",
-                if withdrawn {
-                    "is not answering, so the note was withdrawn"
-                } else {
-                    "took the note and did not confirm it"
-                }
+                "the cones reporter in {name} session {id} took the note and did not confirm it \
+                 within {}s",
+                (pickup + answer_within).as_secs()
             );
         }
         std::thread::sleep(Duration::from_millis(50));

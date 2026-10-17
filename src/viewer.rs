@@ -1267,15 +1267,17 @@ pub fn echoes_command(
 
 /// Type one slash command into a native client opened only for it, the way the dashboard
 /// hands a rename to a client it shows: wait for the empty editor, type, wait for the echo,
-/// submit. `done` reports when the harness has applied it; the client closes either way.
+/// submit. `done` reports when the harness has applied it, which it has `apply_within` of the
+/// submission to do; the client closes either way.
 pub fn submit_command(
     client: Command,
     command: &str,
     input: &crate::harness::spec::Input,
     mut done: impl FnMut() -> bool,
+    apply_within: Duration,
 ) -> io::Result<()> {
     let mut viewer = Viewer::spawn(client, 40, 160, None, Colors::default())?;
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut deadline = Instant::now() + Duration::from_secs(20);
     let mut typed = false;
     let mut submitted = false;
     loop {
@@ -1293,9 +1295,13 @@ pub fn submit_command(
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 if submitted {
-                    "the native client took the command and did not apply it within 20s"
+                    format!(
+                        "the native client took the command and did not apply it within {}s",
+                        apply_within.as_secs()
+                    )
                 } else {
                     "the native client showed no empty editor to take the command within 20s"
+                        .to_owned()
                 },
             ));
         }
@@ -1306,6 +1312,7 @@ pub fn submit_command(
         } else if typed && !submitted && echoes_command(screen, command, input) {
             viewer.write(b"\r");
             submitted = true;
+            deadline = Instant::now() + apply_within;
         }
         std::thread::sleep(Duration::from_millis(20));
     }

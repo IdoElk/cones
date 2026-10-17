@@ -68,7 +68,7 @@ export default {
         invalidate();
       }
     };
-    // Each `<name>.json` is {text}, or {name} for the session title, and is answered by
+    // Each `<name>.json` is {text}, {name} for the session title, or {compact}, and is answered by
     // `<name>.done`, so the sender learns whether OpenCode took the note. A note that cannot be
     // removed was withdrawn by its sender, or taken by an earlier pass still awaiting
     // OpenCode, and is not delivered.
@@ -87,6 +87,19 @@ export default {
           const id = route.name === "session" ? route.params?.sessionID : undefined;
           if (!id) {
             answer = { error: "this OpenCode shows no session" };
+          } else if (note.compact) {
+            // What OpenCode's own /compact calls, on the model of the session's last reply.
+            // It returns once the summary has replaced the context.
+            const model = (message) => message.role === "assistant" && (message.providerID
+              ? { providerID: message.providerID, modelID: message.modelID } : message.model);
+            const last = api.state.session.messages(id).map(model).findLast((m) =>
+              m?.providerID && m?.modelID);
+            if (!last) {
+              answer = { error: "this OpenCode session has no reply to compact yet" };
+            } else {
+              const result = await api.client.session.summarize({ sessionID: id, ...last });
+              if (result?.error) answer = { error: JSON.stringify(result.error) };
+            }
           } else if (note.name !== undefined) {
             // What OpenCode's own rename dialog calls.
             const result = await api.client.session.update({ sessionID: id, title: note.name });

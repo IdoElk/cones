@@ -33,6 +33,8 @@ Every verb below is a `cones` command, open to any agent with a shell.
 | Message | `send` | Through the harness's `message` |
 | Wait | `wait` | Until a session settles |
 | Rename | `rename` | The harness's own rename |
+| Ask | `btw` | A read-only fork that is not kept |
+| Compact | `compact` | The harness's own compaction |
 | Stop | `stop` | Keeps the conversation |
 | Remove | `rm` | Also closes jobs and folders |
 

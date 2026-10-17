@@ -78,6 +78,18 @@ operations:
       contains: [fork]
       error: "this opencode does not support native forks"
       description: "opencode: native session forks"
+  btw:
+    # A headless fork on OpenCode's read-only plan agent. OpenCode saves every fork, so cones
+    # deletes the one its JSON events name.
+    args: [run, --session, "{id}", --fork, --agent, plan, --format, json, --, "{text}"]
+    probe:
+      args: [run, --help]
+      output: stderr
+      require_success: false
+      contains: [--fork, --agent, --format]
+      error: "this opencode cannot run a fork headless, so a side question cannot be asked"
+      description: "opencode: side questions in a read-only fork cones deletes"
+  compact: true
   resume:
     args: [--session, "{id}"]
   message:

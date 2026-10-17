@@ -315,6 +315,25 @@ fn control_tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "cones_btw",
+            "Ask a conversation one side question and return the answer, as `cones btw` does. The answer comes from a read-only fork its harness keeps nothing of, so the conversation's own context is untouched. A timeout ends the fork and returns timed_out.",
+            json!({
+                "id": id,
+                "question": {"type": "string", "minLength": 1},
+                "model": {"type": "string"},
+                "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600, "default": 300}
+            }),
+            &["id", "question"],
+            false,
+        ),
+        tool(
+            "cones_compact",
+            "Compact a live session's context through its harness's own compaction, as `cones compact` does, and return once it is done. A working session is refused.",
+            json!({"id": id}),
+            &["id"],
+            false,
+        ),
+        tool(
             "cones_stop",
             "End a session's work and keep its conversation, as `cones stop` does.",
             json!({"id": id}),
@@ -339,7 +358,8 @@ fn control_argv(name: &str, arguments: &Value) -> Result<Vec<String>> {
     let allowed: &[&str] = match name {
         "cones_ls" => &["dir"],
         "cones_launch" => &["dir", "prompt", "harness", "model", "effort", "name"],
-        "cones_resume" | "cones_fork" | "cones_stop" => &["id"],
+        "cones_resume" | "cones_fork" | "cones_stop" | "cones_compact" => &["id"],
+        "cones_btw" => &["id", "question", "model", "timeout_seconds"],
         "cones_send" => &["id", "text"],
         "cones_wait" => &["ids", "timeout_seconds"],
         "cones_rename" => &["id", "name"],
@@ -381,21 +401,25 @@ fn control_argv(name: &str, arguments: &Value) -> Result<Vec<String>> {
                 argv.extend(["--".into(), prompt]);
             }
         }
-        "cones_resume" | "cones_fork" | "cones_stop" => argv.extend(["--".into(), need("id")?]),
+        "cones_resume" | "cones_fork" | "cones_stop" | "cones_compact" => {
+            argv.extend(["--".into(), need("id")?])
+        }
+        "cones_btw" => {
+            if let Some(model) = text("model")? {
+                argv.extend(["--model".into(), model]);
+            }
+            argv.extend(["--timeout".into(), seconds(object)?.to_string()]);
+            argv.extend(["--".into(), need("id")?, need("question")?]);
+        }
         "cones_send" => argv.extend(["--".into(), need("id")?, need("text")?]),
         "cones_rename" => argv.extend(["--".into(), need("id")?, need("name")?]),
         "cones_rm" => argv.extend(["--".into(), need("target")?]),
         "cones_wait" => {
-            let timeout = match object.get("timeout_seconds") {
-                None | Some(Value::Null) => 300.0,
-                Some(v) => v.as_f64().context("timeout_seconds must be a number")?,
-            };
-            // An MCP call holds the client's turn, so a wait always ends.
-            ensure!(
-                timeout > 0.0 && timeout <= 600.0,
-                "timeout_seconds must be above 0 and at most 600"
-            );
-            argv.extend(["--timeout".into(), timeout.to_string(), "--".into()]);
+            argv.extend([
+                "--timeout".into(),
+                seconds(object)?.to_string(),
+                "--".into(),
+            ]);
             let ids = object
                 .get("ids")
                 .and_then(Value::as_array)
@@ -408,6 +432,19 @@ fn control_argv(name: &str, arguments: &Value) -> Result<Vec<String>> {
         _ => unreachable!("checked above"),
     }
     Ok(argv)
+}
+
+/// A call's `timeout_seconds`. An MCP call holds the client's turn, so a wait always ends.
+fn seconds(object: &serde_json::Map<String, Value>) -> Result<f64> {
+    let timeout = match object.get("timeout_seconds") {
+        None | Some(Value::Null) => 300.0,
+        Some(v) => v.as_f64().context("timeout_seconds must be a number")?,
+    };
+    ensure!(
+        timeout > 0.0 && timeout <= 600.0,
+        "timeout_seconds must be above 0 and at most 600"
+    );
+    Ok(timeout)
 }
 
 fn control_call(control: &Control, name: &str, params: &Value) -> Value {
@@ -433,8 +470,8 @@ fn control_call(control: &Control, name: &str, params: &Value) -> Value {
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
     let code = out.status.code();
-    // `wait` exits 2 on its timeout, which is an answer and not a failure.
-    let timed_out = name == "cones_wait" && code == Some(2);
+    // `wait` and `btw` exit 2 on their timeout, which is an answer and not a failure.
+    let timed_out = matches!(name, "cones_wait" | "cones_btw") && code == Some(2);
     let mut value = json!({"exit": code, "stdout": stdout, "stderr": stderr});
     if name == "cones_ls" {
         value["rows"] = stdout

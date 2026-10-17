@@ -3,6 +3,7 @@
 //! Select a file's tests by its module: `scripts/check test --test integration runner::`.
 //! `cost.rs` is its own target: it owns the process-wide price service.
 
+mod btw;
 mod check_script;
 mod codex;
 // `core` would shadow the standard crate of that name.

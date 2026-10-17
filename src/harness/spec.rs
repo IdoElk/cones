@@ -151,6 +151,13 @@ pub struct Operations {
     pub message: Option<Message>,
     #[serde(default)]
     pub rename: bool,
+    /// Ask a conversation one question in a read-only fork the harness keeps nothing of, and
+    /// print the answer. `{id}` or `{transcript}`, `{text}`, and `{scratch}` or `{answer}`:
+    /// a private directory, or a file in it, that cones removes afterwards.
+    pub btw: Option<Operation>,
+    /// Compact a live session's context the way its own `/compact` does.
+    #[serde(default)]
+    pub compact: bool,
     #[serde(default)]
     pub sessions: Sessions,
 }
@@ -1217,6 +1224,7 @@ impl HarnessSpec {
             &self.operations.attach,
             &self.operations.resume,
             &self.operations.fork,
+            &self.operations.btw,
             &self.operations.remove,
             &self.operations.unarchive,
         ]
@@ -1238,6 +1246,18 @@ impl HarnessSpec {
                 &["id", "short_id", "remote", "transcript", "new_id"],
             )?;
             require_operand(&fork.args, &["{id}", "{transcript}"])?;
+        }
+        if let Some(btw) = &self.operations.btw {
+            ensure!(
+                !self.kind.terminal_only(),
+                "btw requires a verified native adapter"
+            );
+            validate_args(
+                &btw.args,
+                &["id", "transcript", "text", "scratch", "answer"],
+            )?;
+            require_operand(&btw.args, &["{id}", "{transcript}"])?;
+            require_operand(&btw.args, &["{text}"])?;
         }
         validate_args(&self.commands.attach, &["id", "short_id", "remote"])?;
         validate_args(
@@ -1270,6 +1290,17 @@ impl HarnessSpec {
                         | HarnessKind::Opencode
                 ),
             "rename requires a native rename adapter"
+        );
+        ensure!(
+            !self.operations.compact
+                || matches!(
+                    self.kind,
+                    HarnessKind::Claude
+                        | HarnessKind::Codex
+                        | HarnessKind::Pi
+                        | HarnessKind::Opencode
+                ),
+            "compact requires a native compaction adapter"
         );
         for kind in self.session_kinds.values().chain([&self.default_session]) {
             ensure!(

@@ -23,6 +23,8 @@ Kimi. The [command reference](cli.md#commands) has each verb's rules.
 | `send` | ✓ | Daemon | Owned | Owned | – |
 | `wait` | ✓ | ✓ | ✓ | Owned | – |
 | `rename` | ✓ | ✓ | Owned | Owned | – |
+| `btw` | ✓ | ✓ | ✓ | ✓ | – |
+| `compact` | Background | ✓ | Owned | Owned | – |
 | `stop` | Background | Daemon | Owned | Owned | Owned |
 | `rm` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Join from the dashboard | Background | Daemon | Owned | Owned | Owned |

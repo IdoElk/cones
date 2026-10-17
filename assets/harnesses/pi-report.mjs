@@ -23,28 +23,41 @@ export default function report(pi) {
       renameSync(`${path}.tmp`, path);
     } catch { invalidate(); }
   };
-  // Each `<name>.json` is {text}, or {name} for Pi's own session name, and is answered by
-  // `<name>.done`, so the sender learns whether Pi took the note. A note that cannot be
-  // removed was withdrawn by its sender and is not delivered.
+  const answer = (done, value) => {
+    try {
+      writeFileSync(`${done}.tmp`, JSON.stringify(value), { mode: 0o600 });
+      renameSync(`${done}.tmp`, done);
+    } catch {}
+  };
+  // Each `<name>.json` is {text}, {name} for Pi's own session name, or {compact}, and is
+  // answered by `<name>.done`, so the sender learns whether Pi took the note. A compaction is
+  // answered when Pi reports it done or failed. A note that cannot be removed was withdrawn by
+  // its sender and is not delivered.
   const deliver = () => {
     let names;
     try { names = readdirSync(notes); } catch { return; }
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
       const file = join(notes, name), done = `${file.slice(0, -5)}.done`;
-      let text, answer = {};
+      let text, reply = {};
       try { text = readFileSync(file, "utf8"); rmSync(file); } catch { continue; }
       try {
         const note = JSON.parse(text);
+        // `/compact` calls the same, and Pi records a compaction entry when it is done.
+        if (note.compact) {
+          if (!context) throw new Error("this pi has no session to compact yet");
+          context.compact({
+            onComplete: () => answer(done, {}),
+            onError: (error) => answer(done, { error: String(error?.message ?? error) }),
+          });
+          continue;
+        }
         // `/name` calls the same; Pi records it as a session_info entry.
         if (note.name !== undefined) pi.setSessionName(note.name);
         // Pi runs it at once when idle and queues it behind the current assistant turn otherwise.
         else pi.sendUserMessage(note.text, { deliverAs: "steer" });
-      } catch (error) { answer = { error: String(error?.message ?? error) }; }
-      try {
-        writeFileSync(`${done}.tmp`, JSON.stringify(answer), { mode: 0o600 });
-        renameSync(`${done}.tmp`, done);
-      } catch {}
+      } catch (error) { reply = { error: String(error?.message ?? error) }; }
+      answer(done, reply);
     }
   };
   const inbox = setInterval(deliver, 250); inbox.unref?.();

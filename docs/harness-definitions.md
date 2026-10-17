@@ -27,7 +27,7 @@ permissions. Cost adapters supply native records to the shared [accounting compo
 | `discovery` | Registry/process match, daemon/lock paths and excluded subcommands. |
 | `state` | Ordered event guards, discriminator pointers and state mappings. Claude uses native code instead. |
 | `transcript` | Scan roots, message sources and saved statusLine source. `window_pointer`, `cost_pointer`, `effort_pointer` and `dir_pointer` select reported values. |
-| `operations` | Launch, attach, resume, fork, stop, remove, unarchive, message, rename and session-kind behavior. |
+| `operations` | Launch, attach, resume, fork, btw, stop, remove, unarchive, message, rename, compact and session-kind behavior. |
 | `execution` | Native enforcement and result-reporting support; both default to `unknown`. |
 | `viewer` | Label, peek, retention, alignment and native input overrides. |
 
@@ -106,10 +106,17 @@ as a command, for Claude only `peer_inbox: {protocols: [...]}`, or for pi and Op
 ([message delivery](harness.md#message-delivery)).
 `rename: true` enables a registered native rename, currently Claude, Codex, pi and OpenCode
 ([how each is named](cli.md#renaming-a-session)); YAML supplies no file-writing program.
+`compact: true` likewise enables a registered native compaction
+([how each is compacted](cli.md#compacting-a-session)).
+
+`operations.btw` is the headless, read-only fork a [side question](cli.md#asking-a-side-question)
+runs. It takes `{id}` or `{transcript}`, `{text}` for the question, and optionally `{scratch}`,
+a private directory, or `{answer}`, a file in it, both removed afterwards. Native handlers read
+the answer and delete what the harness keeps of the fork, so it requires a native adapter.
 
 Command arguments are arrays with whole-argument placeholders. Allowed names depend on the
-operation: `prompt`, `remote`, `cwd`, `id`, `short_id`, `transcript`, fork `new_id` and message
-`text`. Unknown placeholders or missing operands fail. Substitution preserves bytes and performs
+operation: `prompt`, `remote`, `cwd`, `id`, `short_id`, `transcript`, fork `new_id`, message
+and btw `text`, and btw `scratch` and `answer`. Unknown placeholders or missing operands fail. Substitution preserves bytes and performs
 no shell expansion. Positional prompts follow `--`; see [other prompt forms](#terminal-only-definitions-and-forks).
 
 Probes declare command, required output, version format and diagnostics. `output` defaults to

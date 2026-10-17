@@ -141,6 +141,59 @@ pub fn require_session(db: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The answer in the JSON events `opencode run --format json` prints: the text parts of its
+/// last step, which follow the tool calls of any earlier step.
+pub fn answer(events: &str) -> Result<String> {
+    let mut text = Vec::new();
+    for event in events
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    {
+        match event["type"].as_str() {
+            Some("step_start") => text.clear(),
+            Some("text") => text.extend(event["part"]["text"].as_str().map(str::to_owned)),
+            Some("error") => anyhow::bail!(
+                "opencode could not answer: {}",
+                event["error"]["data"]["message"]
+                    .as_str()
+                    .or(event["error"]["name"].as_str())
+                    .unwrap_or("it reported an error")
+            ),
+            _ => {}
+        }
+    }
+    Ok(text.join("\n"))
+}
+
+/// Delete the fork a headless `opencode run --fork` made of `entry`, by the session id its own
+/// events name, through `opencode session delete`. Every OpenCode fork is saved, so a side
+/// question would otherwise leave one behind. The conversation the fork was made from is
+/// never deleted, whatever the events say.
+pub fn delete_fork(entry: &Entry, events: &str) -> Result<()> {
+    let forks: std::collections::BTreeSet<String> = events
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter_map(|event| event["sessionID"].as_str().map(str::to_owned))
+        .filter(|id| valid_id(id) && *id != entry.key.session_id)
+        .collect();
+    for fork in forks {
+        let path = crate::harness::executable("opencode", &crate::harness::launch_path())
+            .context("opencode not found on the launch PATH")?;
+        let out = Command::new(path)
+            .args(["session", "delete", &fork])
+            .env("OPENCODE_DB", &entry.transcript)
+            .current_dir(&entry.cwd)
+            .output()
+            .context("opencode session delete")?;
+        ensure!(
+            out.status.success(),
+            "the side question's fork {fork} could not be deleted: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// A route report names a conversation, not a database. Resolve that exact id and
 /// directory, retaining a known database when the viewer came from history.
 pub fn session_database(

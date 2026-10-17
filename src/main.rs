@@ -218,6 +218,25 @@ enum Action {
         id: String,
         name: String,
     },
+    /// Ask a conversation one question in a read-only fork its harness keeps nothing of, and
+    /// print the answer. The conversation itself is not written to; see docs/cli.md.
+    Btw {
+        /// The conversation's id as `cones search` or `cones ls` prints it, or a prefix of one.
+        id: String,
+        question: String,
+        /// The model the fork answers on, instead of the configured default.
+        #[arg(long)]
+        model: Option<String>,
+        /// Give up after this many seconds, fractions allowed, end the fork and exit 2.
+        #[arg(long, value_parser = seconds)]
+        timeout: Option<std::time::Duration>,
+    },
+    /// Compact a live session's context through its harness's own compaction, and return once
+    /// it is done; see docs/cli.md.
+    Compact {
+        /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
+        id: String,
+    },
     /// What the dashboard's ctrl+x twice does to a row: stop it, remove it or close it; see
     /// docs/cli.md.
     Rm {
@@ -934,6 +953,39 @@ fn execute(cli: Cli) -> Result<i32> {
                 .with_context(|| format!("no session {id}; `cones ls` lists them"))?;
             harness::rename(session, &harness::home_of(session, &claude), &state, &name)?;
             println!("renamed {id} ({}) to {}", session.harness, name.trim());
+            Ok(0)
+        }
+        Action::Btw {
+            id,
+            question,
+            model,
+            timeout,
+        } => {
+            let entry = cones::show::entry(&claude, &id)?;
+            let policy = config::defaults(&jobs_path);
+            match harness::btw(&entry, &policy, &question, model.as_deref(), timeout)? {
+                Some(answer) => println!("{answer}"),
+                None => {
+                    println!("timeout");
+                    return Ok(2);
+                }
+            }
+            Ok(0)
+        }
+        Action::Compact { id } => {
+            let rows = cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?;
+            let ids = rows.iter().map(|s| s.session_id.clone());
+            let id = if id.len() >= 4 {
+                by_prefix(ids, &id)?
+            } else {
+                id
+            };
+            let session = rows
+                .iter()
+                .find(|s| s.session_id == id)
+                .with_context(|| format!("no session {id}; `cones ls` lists them"))?;
+            harness::compact(session, &harness::home_of(session, &claude), &state)?;
+            println!("compacted {id} ({})", session.harness);
             Ok(0)
         }
         Action::Rm { target } => {

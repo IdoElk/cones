@@ -37,6 +37,8 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones wait ID... [--timeout S]` | [Block until a session settles](#waiting-on-a-session) and print `ID<TAB>STATE`. |
 | `cones send ID TEXT` | [Send one note](#sending-a-note) to a live session in any folder. |
 | `cones rename ID NAME` | [Name a session](#renaming-a-session) through its harness's own rename, as the dashboard's `ctrl+n` does. |
+| `cones btw ID QUESTION [--model ID] [--timeout S]` | [Ask a side question](#asking-a-side-question) in a read-only fork the harness keeps nothing of, and print the answer. |
+| `cones compact ID` | [Compact a session's context](#compacting-a-session) through its harness's own compaction. |
 | `cones stop ID` | [Stop a session](#stopping-a-session) and keep its conversation. |
 | `cones rm TARGET` | Do to a run, session, job or folder what the dashboard's [`ctrl+x` twice](#removing-a-row) does. |
 | `cones comms [--dir PATH] send\|mail\|wait ...` | [Write to the agents in a folder, read their replies and wait for one](#comms). |
@@ -204,10 +206,13 @@ and returns its `exit`, `stdout` and `stderr`:
 | `cones_send` | `send` | `id`, `text` |
 | `cones_wait` | `wait` | `ids`, `timeout_seconds` up to 600, default 300 |
 | `cones_rename` | `rename` | `id`, `name` |
+| `cones_btw` | `btw` | `id`, `question`, `model`, `timeout_seconds` up to 600, default 300 |
+| `cones_compact` | `compact` | `id` |
 | `cones_stop`, `cones_rm` | `stop`, `rm` | `id`; `target` for `rm` |
 
-A nonzero exit is `isError: true` with the command's error, except a `wait` that runs out,
-which returns `timed_out: true`. A wait always ends, since the call holds the client's turn.
+A nonzero exit is `isError: true` with the command's error, except a `wait` or `btw` that
+runs out, which returns `timed_out: true`. Both always end, since the call holds the client's
+turn.
 An argument a command does not take is refused before anything runs. None of the tools can
 change harness permissions or edit native configuration. Adding this server to a harness
 remains an explicit configuration action.
@@ -357,6 +362,58 @@ must be one line. Each harness is named the way its own rename does it:
 
 A client cones does not own, a harness with no session name of its own (Gemini, Cursor Agent,
 Copilot, Amp, Droid, Kimi) and an ambiguous or unknown id fail without changing anything.
+
+### Asking a side question
+
+```sh
+cones btw 5bf8392e "which test did you skip, and why?"
+```
+
+Asks the conversation `ID` names one question and prints the answer. The question goes to a
+fork of the conversation, run headless under the harness's own read-only setting, and the
+fork is not kept, so the conversation's context, transcript and history are untouched. It
+works on a live session and on one from history, and starts nothing that keeps running. `ID`
+is one `cones search` or `cones ls` prints, or a prefix of one.
+
+| Harness | Fork | Read-only setting | What is left |
+| --- | --- | --- | --- |
+| Claude Code | `claude -p --resume ID --fork-session --no-session-persistence` | `--permission-mode plan` | Nothing is saved. |
+| Codex | `codex exec fork --ephemeral` | `codex exec --sandbox read-only` | Nothing is saved. |
+| pi | `pi --print --fork TRANSCRIPT --session-dir DIR` | `--tools read,grep,find,ls` | pi refuses `--no-session` with `--fork`, so the fork is saved in a private directory cones removes. |
+| OpenCode | `opencode run --session ID --fork --format json` | `--agent plan` | OpenCode saves every fork; cones deletes the one its events name with `opencode session delete`, never the conversation it came from. |
+
+Each runs in the conversation's folder and native home. The owner's skip-permissions setting
+is never added. The fork answers on the configured default model, or on `--model`, through
+the harness's own model flag. A fork on another model than the conversation's reads the whole
+context without the prompt cache. `--timeout S` ends the fork after S seconds and exits 2 with
+`timeout`; OpenCode's fork is still deleted. An error the harness reports is printed and
+exits 1. Other harnesses have no verified fork that keeps nothing, and are refused. Verified
+against Claude Code 2.1.302, Codex 0.163.0 on a loopback provider, pi 0.85.1 and OpenCode
+1.18.31: Claude Code and Codex on a live session, Claude Code, pi and OpenCode on one from
+history. The shape of an OpenCode error event is unverified.
+
+### Compacting a session
+
+```sh
+cones compact 5bf8392e
+```
+
+Compacts a live session's context the way its harness's own `/compact` does, and returns once
+the harness reports the compaction done, within ten minutes. A session whose turn is running
+is refused; [`cones wait`](#waiting-on-a-session) says when it ends.
+
+| Target | Operation |
+| --- | --- |
+| Claude background | `/compact` typed into a client attached only for it, as [rename](#renaming-a-session) types `/rename`. Done when the transcript records Claude Code's `compact_boundary`. |
+| Codex thread | The daemon's `thread/compact/start`, which Codex's `/compact` calls, after `thread/resume` loads a thread the daemon is not holding. Done when the compaction's turn is listed completed. |
+| pi or OpenCode client cones owns | The reporter calls pi's `compact` or OpenCode's `session.summarize` on the model of the session's last reply, which their own `/compact` calls, and answers when it returns. |
+
+A Claude session in a terminal cones cannot join, a pi or OpenCode client cones does not own,
+and the harnesses with no compaction of their own (Gemini, Cursor Agent, Copilot, Amp, Droid,
+Kimi) are refused without changing anything. Verified against the same versions as side
+questions, Codex on a thread its daemon had dropped. A session waiting on a question or
+permission dialog is unverified; Claude's shows no empty editor and the command fails after
+20 seconds.
 
 ### Removing a row
 

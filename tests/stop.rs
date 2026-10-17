@@ -45,7 +45,8 @@ echo "stopped $2"
 
 /// `claude attach`: an empty editor that echoes what is typed and logs each submitted line to
 /// `typed.log` in the native home. `/rename NAME` appends the two records Claude Code's own
-/// command writes, `custom-title` and then `agent-name`.
+/// command writes, `custom-title` and then `agent-name`. `/compact` appends the
+/// `compact_boundary` record Claude Code writes once the context is replaced, a moment later.
 const ATTACH: &str = r#"
 import glob, json, os, sys, tty
 tty.setraw(0)
@@ -69,6 +70,12 @@ while True:
         with open(transcript, "a") as f:
             f.write(json.dumps({"type": "custom-title", "customTitle": name}) + "\n")
             f.write(json.dumps({"type": "agent-name", "agentName": name}) + "\n")
+    if line == "/compact":
+        import time
+        time.sleep(0.5)
+        with open(transcript, "a") as f:
+            f.write(json.dumps({"type": "system", "subtype": "compact_boundary",
+                                "compactMetadata": {"trigger": "manual"}}) + "\n")
     os.write(1, "\r\n❯ ".encode())
     text = b""
 "#;
@@ -113,9 +120,13 @@ impl Fixture {
 
     /// A live registry entry for `id`, reported against a disposable process cones must not touch.
     fn live(&self, id: &str, kind: &str, pid: u32) {
+        self.live_as(id, kind, pid, "busy");
+    }
+
+    fn live_as(&self, id: &str, kind: &str, pid: u32, status: &str) {
         fs::write(
             self.home().join(format!("sessions/{id}.json")),
-            json!({"sessionId": id, "pid": pid, "kind": kind, "cwd": self.root.path(), "status": "busy"})
+            json!({"sessionId": id, "pid": pid, "kind": kind, "cwd": self.root.path(), "status": status})
                 .to_string(),
         )
         .unwrap();
@@ -467,7 +478,7 @@ pub(crate) fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
     let idle = dir.join("idle");
     std::thread::spawn(move || {
         // Polls left before each acknowledged request is reported done; None is still running.
-        let (mut turn, mut terminal) = (None::<u8>, None::<u8>);
+        let (mut turn, mut terminal, mut compaction) = (None::<u8>, None::<u8>, None::<u8>);
         for stream in listener.incoming() {
             let mut socket = tungstenite::accept(stream.unwrap()).unwrap();
             while let Ok(Message::Text(text)) = socket.read() {
@@ -489,6 +500,20 @@ pub(crate) fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
                             "status": {"type": status, "activeFlags": []}}})
                     }
                     "thread/loaded/list" => json!({"data": loaded}),
+                    "thread/turns/list" if compaction.is_some() => {
+                        let status = if compaction == Some(0) {
+                            "completed"
+                        } else {
+                            "inProgress"
+                        };
+                        compaction = compaction.map(|left| left.saturating_sub(1));
+                        json!({"data": [{"id": "turn-compact", "status": status}]})
+                    }
+                    "thread/compact/start" => {
+                        compaction = Some(2);
+                        json!({})
+                    }
+                    "thread/resume" => json!({"thread": {"id": request["params"]["threadId"]}}),
                     "thread/turns/list" => {
                         let status = if turn == Some(0) {
                             "interrupted"
@@ -1341,4 +1366,103 @@ fn rename_of_an_unknown_session_reaches_nothing() {
         text(&out.stderr)
     );
     assert_eq!(f.calls(), "");
+}
+
+/// A Claude background session takes `/compact` in a client opened only for it, as the native
+/// command is typed, and the command returns once the transcript records the compaction. A
+/// session whose turn is running is refused before anything is opened.
+#[test]
+fn compact_hands_a_background_claude_session_the_native_command() {
+    let f = Fixture::new();
+    let id = "aaaaaaaa-7777-4777-8777-777777777777";
+    let idle = Idle::new();
+    f.live_as(id, "bg", idle.0.id(), "busy");
+    let transcript = f.transcript(id);
+
+    let out = f.cones(&["compact", "aaaaaaaa"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains(&format!("{id} is working")),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(!f.home().join("typed.log").exists(), "nothing was typed");
+
+    f.live_as(id, "bg", idle.0.id(), "idle");
+    let out = f.cones(&["compact", "aaaaaaaa"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), format!("compacted {id} (claude)\n"));
+    assert_eq!(
+        fs::read_to_string(f.home().join("typed.log")).unwrap(),
+        "/compact\n",
+        "one native command, typed once"
+    );
+    assert_eq!(f.calls(), "", "no other native subcommand was run");
+    assert!(
+        fs::read_to_string(&transcript)
+            .unwrap()
+            .contains("compact_boundary")
+    );
+}
+
+/// A Claude session in someone else's terminal cannot be joined, so nothing can type its
+/// `/compact`, and cones says so instead of writing anything.
+#[test]
+fn compact_refuses_a_claude_session_in_its_own_terminal() {
+    let f = Fixture::new();
+    let id = "aaaaaaaa-8888-4888-8888-888888888888";
+    let idle = Idle::new();
+    f.live_as(id, "interactive", idle.0.id(), "idle");
+    let transcript = f.transcript(id);
+    let before = fs::read(&transcript).unwrap();
+
+    let out = f.cones(&["compact", "aaaaaaaa"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("only its own /compact can compact it"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(fs::read(&transcript).unwrap(), before);
+    assert!(!f.home().join("typed.log").exists());
+    assert!(idle.alive());
+}
+
+/// A Codex thread is compacted through its daemon's `thread/compact/start`, which Codex's own
+/// `/compact` calls, after the daemon loads a thread it does not hold, and the command returns
+/// once the compaction's turn is listed completed.
+#[test]
+fn compact_compacts_a_codex_thread_through_its_daemon() {
+    let f = Fixture::new();
+    let bin = f.root.path().join(".local/bin/codex");
+    fs::write(&bin, CODEX).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec06072";
+    codex_thread(&f, id);
+    let calls = codex_daemon(&f, &[]);
+    let idle = f.root.path().join(".codex/app-server-control/idle");
+    fs::write(&idle, format!("{id}\n")).unwrap();
+
+    let out = f.cones(&["compact", &id[..8]]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), format!("compacted {id} (codex)\n"));
+    let sent: Vec<_> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call["method"].as_str(),
+                Some("thread/resume" | "thread/compact/start")
+            )
+        })
+        .map(|call| (call["method"].clone(), call["params"].clone()))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (json!("thread/resume"), json!({"threadId": id})),
+            (json!("thread/compact/start"), json!({"threadId": id})),
+        ]
+    );
 }

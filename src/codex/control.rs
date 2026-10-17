@@ -1,10 +1,12 @@
-//! End or name one thread over the already-running local Codex app-server, or trust a folder.
+//! End, name or compact one thread over the already-running local Codex app-server, or trust a
+//! folder.
 //!
-//! Codex has no stop or rename subcommand. Its app-server protocol interrupts a turn by id,
-//! closes the terminals a thread left running, and names a thread the way its own `/rename`
-//! does, loaded or not; all of these keep the conversation. It also saves a folder's trust the
-//! way the client's own "Trust and continue" does. Nothing here starts a daemon, resumes or
-//! subscribes to a thread, or answers a request the daemon sends.
+//! Codex has no stop, rename or compact subcommand. Its app-server protocol interrupts a turn
+//! by id, closes the terminals a thread left running, names a thread the way its own `/rename`
+//! does, loaded or not, and compacts one the way its own `/compact` does; all of these keep the
+//! conversation. It also saves a folder's trust the way the client's own "Trust and continue"
+//! does. Nothing here starts a daemon or answers a request the daemon sends, and only a
+//! compaction loads a thread the daemon is not holding, as a client joining it would.
 use super::runtime::{connect, remaining, send};
 use serde_json::{Value, json};
 use std::{
@@ -102,6 +104,43 @@ pub fn rename(home: &Path, thread: &str, name: &str) -> io::Result<()> {
     client(home, "cones_rename")?
         .call("thread/name/set", json!({"threadId": thread, "name": name}))
         .map(drop)
+}
+
+/// Compact `thread` through `thread/compact/start`, which Codex's own `/compact` calls, and
+/// return once the daemon lists the compaction's turn as ended, within `within`. A thread the
+/// daemon has not loaded is loaded first with `thread/resume`, as a client opening it does.
+pub fn compact(home: &Path, thread: &str, within: Duration) -> io::Result<()> {
+    let mut client = client(home, "cones_compact")?;
+    let loaded = client.call("thread/loaded/list", json!({}))?;
+    if !loaded["data"]
+        .as_array()
+        .is_some_and(|ids| ids.iter().any(|id| id == thread))
+    {
+        client.call("thread/resume", json!({"threadId": thread}))?;
+    }
+    let newest = |client: &mut Client| -> io::Result<Value> {
+        let turns = client.call("thread/turns/list", json!({"threadId": thread, "limit": 1}))?;
+        Ok(turns["data"][0].clone())
+    };
+    let before = newest(&mut client)?["id"].clone();
+    client.call("thread/compact/start", json!({"threadId": thread}))?;
+    client.deadline = Instant::now() + within;
+    loop {
+        let turn = newest(&mut client)?;
+        if turn["id"] != before && turn["status"] != "inProgress" {
+            return match turn["status"].as_str() {
+                Some("completed") => Ok(()),
+                status => Err(io::Error::other(format!(
+                    "the compaction ended {}: {}",
+                    status.unwrap_or("without a status"),
+                    turn["error"]["message"]
+                        .as_str()
+                        .unwrap_or("Codex gave no reason")
+                ))),
+            };
+        }
+        std::thread::sleep(POLL);
+    }
 }
 
 /// Save `dir` as trusted in the daemon's own config, as the client's trust question does when

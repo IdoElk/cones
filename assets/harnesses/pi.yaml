@@ -59,6 +59,17 @@ operations:
       contains: [--fork, --session-id]
       error: "this pi does not support native forks"
       description: "pi: native session forks"
+  btw:
+    # pi refuses --fork with --no-session, so the fork is saved under a directory cones
+    # removes. Only pi's read-only tools are enabled.
+    args: [--print, --fork, "{transcript}", --session-dir, "{scratch}", --tools, "read,grep,find,ls", --, "{text}"]
+    probe:
+      args: [--help]
+      require_success: false
+      contains: [--fork, --session-dir, --tools, --print]
+      error: "this pi cannot fork a session into another directory, so a side question would leave a session behind"
+      description: "pi: side questions in a read-only fork cones removes"
+  compact: true
   resume:
     args: [--session, "{transcript}"]
   message:

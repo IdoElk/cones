@@ -10,7 +10,8 @@
 // arguments, as is every name it sets.
 //
 // `FAKE_REPORTER=deaf` starts without loading the reporter, as a client does when its
-// extensions are disabled.
+// extensions are disabled. `FAKE_REPORTER=uncompactable` fails every compaction, as a session
+// with nothing to compact does.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
@@ -44,6 +45,12 @@ if (name === "pi") {
       cwd,
       sessionManager: { getSessionId: () => session, getSessionFile: () => undefined },
       isIdle: () => true,
+      // Pi reports the end of a compaction later, through the callbacks it was given.
+      compact: ({ onComplete, onError }) => {
+        record({ compact: true });
+        setTimeout(() => process.env.FAKE_REPORTER === "uncompactable"
+          ? onError(new Error("Nothing to compact")) : onComplete({}), 300);
+      },
     });
   }
 } else if (name === "opencode") {
@@ -60,7 +67,8 @@ if (name === "pi") {
         session: {
           get: () => ({ id: session, directory: cwd, title: "fixture", cost: 0,
             time: { created: now, updated: now } }),
-          messages: () => [],
+          messages: () => [{ role: "assistant", providerID: "fixture-provider",
+            modelID: "fixture-model" }],
           status: () => ({ type: "idle" }),
           permission: () => [],
           question: () => [],
@@ -72,6 +80,11 @@ if (name === "pi") {
       client: { session: {
         promptAsync: async (input) => { record(input); return {}; },
         update: async (input) => { record({ update: input }); return {}; },
+        summarize: async (input) => {
+          await new Promise((done) => setTimeout(done, 300));
+          record({ summarize: input });
+          return {};
+        },
       } },
     }, options);
   }

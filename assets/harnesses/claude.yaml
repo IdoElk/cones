@@ -80,6 +80,17 @@ operations:
     # 2.1.278, 2.1.280 and 2.1.281, which all publish peerProtocol 1.
     peer_inbox:
       protocols: [1]
+  btw:
+    # A headless fork in plan mode, which Claude keeps nothing of. Verified against 2.1.302:
+    # the answer is the result of its JSON report and no transcript is written.
+    args: [-p, --resume, "{id}", --fork-session, --no-session-persistence, --permission-mode, plan, --output-format, json, --, "{text}"]
+    probe:
+      args: [--help]
+      require_success: false
+      contains: [--fork-session, --no-session-persistence, --permission-mode]
+      error: "this claude cannot fork a conversation without saving it, so a side question would leave a session behind"
+      description: "claude: side questions in a read-only fork it does not save"
+  compact: true
   rename: true
   sessions:
     default: {join: attach, remove: none, lifetime: daemon}

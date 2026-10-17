@@ -54,7 +54,9 @@ works, and an ambiguous one is an error rather than a guess. `cones launch --nam
 a session at start and `cones rename ID NAME` names one later, through the harness's own
 rename, so a worker's row says what it is doing. `cones stop ID` ends a session's
 work and keeps its conversation; `cones rm ID` does what the dashboard's `ctrl+x` twice does
-to a row.
+to a row. `cones btw ID QUESTION` asks a session a side question and prints the answer, from a
+read-only fork that adds nothing to the session's context; `cones compact ID` compacts a
+session's context through its harness's own `/compact`.
 
 ## Running your own workers
 

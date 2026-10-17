@@ -1264,6 +1264,32 @@ fn scan(lines: &str) -> (Option<String>, Vec<String>) {
     out
 }
 
+/// Whether a Claude transcript has recorded a `compact_boundary` since this call, the record
+/// Claude Code's own `/compact` writes once it has replaced the context. Each check reads only
+/// what was appended since the last, up to the last complete line.
+pub fn compaction_after(transcript: &Path) -> impl FnMut() -> bool + use<> {
+    let path = transcript.to_owned();
+    let mut offset = fs::metadata(&path).map_or(0, |m| m.len());
+    move || {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = fs::File::open(&path) else {
+            return false;
+        };
+        let mut appended = Vec::new();
+        if file.seek(SeekFrom::Start(offset)).is_err() || file.read_to_end(&mut appended).is_err() {
+            return false;
+        }
+        let Some(end) = appended.iter().rposition(|&b| b == b'\n') else {
+            return false;
+        };
+        offset += end as u64 + 1;
+        appended[..end].split(|&b| b == b'\n').any(|line| {
+            serde_json::from_slice::<Value>(line)
+                .is_ok_and(|v| v["type"] == "system" && v["subtype"] == "compact_boundary")
+        })
+    }
+}
+
 /// Append Claude's native `custom-title` record. A live session may overwrite it
 /// from memory; its registry entry is left alone.
 pub fn rename(session: &Session, name: &str) -> Result<()> {
