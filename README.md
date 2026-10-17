@@ -28,6 +28,6 @@ Existing sessions appear automatically. `Enter` opens one; `Ctrl+Z` returns to t
 
 To start work, select `+ add folder` and enter a project directory. Choose a harness with `Shift+Tab`, type an instruction, and press `Enter`.
 
-<p align="center"><a href="assets/architecture.png"><img src="assets/architecture.png" alt="The dashboard, your agents and scheduled jobs share one control plane that finds, starts, messages and stops Claude Code, pi, OpenCode and Codex sessions through their own commands" width="100%"></a></p>
+<p align="center"><a href="assets/architecture.png"><img src="assets/architecture.png" alt="The dashboard and the cli and mcp, with jobs and the coordinator in beta, share one control plane that finds, starts, messages and stops Claude Code, pi, OpenCode, Codex and six more harnesses through their own commands" width="100%"></a></p>
 
 [Dashboard](docs/dashboard.md) · [Commands](docs/cli.md) · [Scheduled jobs](docs/jobs.md) · [Harness support](docs/harness.md) · [Architecture](docs/architecture.md) · [Comparisons](docs/comparisons/README.md)
