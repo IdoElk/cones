@@ -309,7 +309,8 @@ Each run starts with a cleared environment. Installed schedules capture values i
 | `timeout` | `timeout` | The clock ran out. | 124 |
 | `timeout` | `replaced` | A later run replaced this one. | 124 |
 | `stopped` | `interrupted` | Dashboard stop, or SIGTERM/SIGINT to the supervisor. A dashboard stop also hides the run's row. | 1 |
-| `failed` | `session_failed`, `session_stopped` | The harness reported the session as failed, or as stopped by something other than this run. | 1 |
+| `stopped` | `session_stopped` | The harness reported the session stopped or gone, ended by something other than this run, such as `cones rm` on the session. | 1 |
+| `failed` | `session_failed` | The harness reported the session as failed. | 1 |
 | `failed` | `session_mismatch` | An event's session id differs from the native id recorded at launch. | 1 |
 | `failed` | `missing_result` | The supervisor ended without an account of the session. | 1 |
 | `failed` | `validation: ...`, `spawn: ...`, `runner: ...` | Compilation, worker launch or supervision failed. | 1 |

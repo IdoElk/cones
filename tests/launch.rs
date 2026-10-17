@@ -1255,18 +1255,26 @@ fn wait_returns_when_a_named_session_settles_including_a_job_s() {
     let out = f.launch("ok", "claude", "port the risk experiment");
     assert!(out.status.success(), "{}", stderr(&out));
     let id = stdout(&out);
-    // The session belongs to a job's run: `ls` lists the run, the verbs still reach the session.
+    // The session belongs to a job's run: `ls` lists it as the session, carrying its run.
     let mut started = Record::new("run-wait-0001".into(), Status::Started);
     started.job = Some("nightly".into());
     started.session_id = Some(id.clone());
     started.cwd = Some(f.work.clone());
     Ledger::new(&f.state()).unwrap().append(&started).unwrap();
-    assert!(
-        !f.rows()
-            .iter()
-            .any(|r| r["session"]["session_id"] == id.as_str()),
-        "{:?}",
-        f.rows()
+    let rows = f.rows();
+    let row = rows
+        .iter()
+        .find(|r| r["session"]["session_id"] == id.as_str())
+        .unwrap_or_else(|| panic!("{rows:?}"));
+    assert_eq!(row["kind"], "session");
+    assert_eq!(row["status"], "idle", "the live session's own state");
+    assert_eq!(row["run"]["run_id"], "run-wait-0001");
+    assert_eq!(row["run"]["job"], "nightly");
+    assert_eq!(row["run"]["status"], "started");
+    assert_eq!(
+        rows.len(),
+        1,
+        "one row for the run and its session: {rows:?}"
     );
 
     let out = f.cones("ok", &["wait", &id]);
@@ -1363,7 +1371,11 @@ impl Fixture {
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .filter(|row| row["kind"] == "run")
+            // A run that started a session is that session's row, carrying the run.
+            .filter_map(|row| match row["kind"].as_str() {
+                Some("run") => Some(row),
+                _ => row.get("run").cloned(),
+            })
             .collect()
     }
 }

@@ -50,7 +50,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 
 `--dir` keeps the rows whose folder is that path or sits under it. This includes worktrees stored inside the directory; linked worktrees elsewhere are not included merely because they share a repository. Both sides are resolved first, so a folder reached through a symlink still matches. A row that reports no folder is not in any folder, so a scoped read leaves it out.
 
-`--json` writes one object per line. `kind` is `run` or `session` and says which of the two shapes follows: `status`, `started` and `terminal` for a run; `status` and `session` for a session. Timestamps stay UTC and native model ids are preserved. A pi, OpenCode or other process-identified session is `<harness>-<pid>` in `session_id`, with the conversation it reports, when it reports one, in `native_id`.
+`--json` writes one object per line. `kind` is `session` or `run` and says which of the two shapes follows: `status` and `session` for a session; `status`, `started` and `terminal` for a run. A run that started a session is printed as that session, with the run under `run`: its `run_id`, `job`, `status`, `started` and `terminal`. The row's own `status` is then the live session's state, or the run's status once the session is gone, when `session` holds only its id, harness and folder. `kind: run` is left for runs that never started a session: skipped, refused or failed before the launch. Timestamps stay UTC and native model ids are preserved. A pi, OpenCode or other process-identified session is `<harness>-<pid>` in `session_id`, with the conversation it reports, when it reports one, in `native_id`.
 
 ```sh
 cones ls --dir ~/src/app --json

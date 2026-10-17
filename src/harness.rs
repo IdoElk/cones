@@ -1734,6 +1734,8 @@ pub struct Outcome {
     pub failed: bool,
     /// The session ended its turn asking for input; it stays up for the answer.
     pub input: bool,
+    /// The session was stopped or removed by something other than this run.
+    pub stopped: bool,
     pub permission_denied: bool,
     pub reason: Option<String>,
     pub session_mismatch: bool,
@@ -1764,6 +1766,7 @@ impl Outcome {
             self.result_seen = true;
             let state = event["state"].as_str().unwrap_or("unreported");
             self.input = state == "blocked";
+            self.stopped = state == "stopped";
             self.failed = !matches!(state, "done" | "blocked");
             self.reason = self.failed.then(|| format!("session_{state}"));
             // A daemon worker reads its session's reported totals on the way out.

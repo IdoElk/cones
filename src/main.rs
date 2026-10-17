@@ -761,6 +761,12 @@ fn execute(cli: Cli) -> Result<i32> {
             }
             // A run the dashboard hid is out of its rows here too; the ledger keeps it.
             let hidden = ledger.hidden()?;
+            // A run that started a session is that session in JSON, carrying its run.
+            let live = if json {
+                cones::tui::sessions(&claude, &state, &config::defaults(&jobs_path))?
+            } else {
+                Vec::new()
+            };
             for run in ledger.runs()?.into_iter().rev().filter(|r| {
                 !hidden.contains(&r.started.run_id)
                     && job
@@ -775,9 +781,31 @@ fn execute(cli: Cli) -> Result<i32> {
                     )
             }) {
                 if json {
+                    let projected = run.started.session_id.as_deref().map(|id| {
+                        let session = live
+                            .iter()
+                            .find(|s| s.session_id == id || s.native_id.as_deref() == Some(id));
+                        let state =
+                            session.map_or_else(|| run.status().to_string(), |s| s.state.clone());
+                        let session = session.map_or_else(
+                            || {
+                                serde_json::json!({
+                                    "session_id": id, "harness": run.started.harness,
+                                    "cwd": run.started.cwd, "state": "-",
+                                })
+                            },
+                            |s| serde_json::json!(s),
+                        );
+                        serde_json::json!({
+                            "kind": "session", "status": state, "session": session,
+                            "run": {"run_id": run.started.run_id, "job": run.started.job,
+                                    "status": run.status(), "started": run.started,
+                                    "terminal": run.terminal},
+                        })
+                    });
                     println!(
                         "{}",
-                        serde_json::json!({"kind":"run","status":run.status(),"started":run.started,"terminal":run.terminal})
+                        projected.unwrap_or_else(|| serde_json::json!({"kind":"run","status":run.status(),"started":run.started,"terminal":run.terminal}))
                     );
                 } else {
                     let last = run.terminal.as_ref().unwrap_or(&run.started);

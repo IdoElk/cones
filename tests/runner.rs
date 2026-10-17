@@ -307,6 +307,34 @@ fn a_session_the_harness_reports_failed_ends_the_run_promptly() {
     assert_eq!(r.status, Status::Failed);
     assert_eq!(r.reason.as_deref(), Some("session_failed"));
 }
+/// A run whose session something else removes, such as `cones rm` on the session, was
+/// stopped, not failed.
+#[test]
+fn a_session_removed_outside_the_run_ends_it_stopped() {
+    let f = Fixture::new("working", 1.0);
+    let mut child = OwnedChild(
+        f.command()
+            .args(["run", "test"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.contains("\tstarted\t"), "{line}");
+    let registry = f.dir.path().join(".claude/sessions");
+    for entry in fs::read_dir(&registry).unwrap().filter_map(Result::ok) {
+        if entry.path().extension().is_some_and(|x| x == "json") {
+            fs::remove_file(entry.path()).unwrap();
+        }
+    }
+    assert_eq!(child.wait().unwrap().code(), Some(1));
+    let r = f.ledger().runs().unwrap().remove(0).terminal.unwrap();
+    assert_eq!(r.status, Status::Stopped);
+    assert_eq!(r.reason.as_deref(), Some("session_stopped"));
+}
 #[test]
 fn timeout_kills_descendants_that_ignore_sigterm() {
     let f = Fixture::new("hang", 0.1);
@@ -737,8 +765,8 @@ fn reading_the_ledger_closes_a_run_whose_supervisor_died() {
         );
         let rows: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stdout)
             .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .filter(|r: &serde_json::Value| r["kind"] == "run")
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter_map(run_of)
             .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["status"], "failed");
@@ -788,8 +816,8 @@ fn reading_the_ledger_leaves_a_session_that_outlived_its_supervisor() {
     );
     let run: serde_json::Value = String::from_utf8_lossy(&out.stdout)
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .find(|r: &serde_json::Value| r["kind"] == "run")
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find_map(run_of)
         .unwrap();
     assert_eq!(run["status"], "started");
     assert!(f.ledger().runs().unwrap()[0].terminal.is_none());
@@ -852,7 +880,7 @@ fn reading_the_ledger_leaves_a_worker_that_outlived_its_supervisor() {
         String::from_utf8_lossy(&out.stdout)
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-            .find(|r| r["kind"] == "run")
+            .find_map(run_of)
             .unwrap()["status"]
             .clone()
     };
@@ -1178,5 +1206,14 @@ fn attach_resumes_a_held_job_without_flags_whatever_the_skip_setting() {
             !printed.contains("'--dangerously-skip-permissions'"),
             "skip={skip}: {printed}"
         );
+    }
+}
+
+/// The run a `cones ls --json` row carries: a run row itself, or the run under a session row
+/// for a run that started a session.
+fn run_of(row: serde_json::Value) -> Option<serde_json::Value> {
+    match row["kind"].as_str() {
+        Some("run") => Some(row),
+        _ => row.get("run").cloned(),
     }
 }

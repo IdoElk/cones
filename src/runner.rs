@@ -595,7 +595,11 @@ pub fn run(job: &ResolvedJob, ledger: &Ledger, executable: &Path, trigger: &str)
             }
             if done && let Some(exit) = exited {
                 terminal.exit = exit.code().or_else(|| exit.signal().map(|s| 128 + s));
-                if exit.success() && outcome.result_seen && outcome.input {
+                if exit.success() && outcome.result_seen && outcome.stopped {
+                    // Ended by someone else: a stop, not a failure of the run.
+                    terminal.status = Status::Stopped;
+                    terminal.reason = Some("session_stopped".into());
+                } else if exit.success() && outcome.result_seen && outcome.input {
                     terminal.status = Status::Input;
                 } else if exit.success() && outcome.result_seen && !outcome.failed {
                     terminal.status = Status::Ok;
