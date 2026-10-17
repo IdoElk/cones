@@ -446,7 +446,8 @@ fn two_mcp_clients_search_and_read_one_cache_without_native_changes() {
                 let list = exchange(&mut input, &mut output, json!({"jsonrpc":"2.0","id":"tools","method":"tools/list"}));
                 assert_eq!(list["id"], "tools");
                 let tools = list["result"]["tools"].as_array().unwrap();
-                assert_eq!(tools.len(), 2);
+                let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+                assert_eq!(names, ["cones_search", "cones_show", "cones_ls", "cones_launch", "cones_resume", "cones_fork", "cones_send", "cones_wait", "cones_rename", "cones_stop", "cones_rm"]);
                 assert_eq!(tools[0]["name"], "cones_search");
                 assert_eq!(tools[0]["inputSchema"]["required"], json!(["query"]));
                 assert_eq!(tools[0]["inputSchema"]["properties"]["limit"]["maximum"], 100);

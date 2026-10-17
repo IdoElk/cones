@@ -1445,3 +1445,127 @@ fn harness_rollout(f: &Fixture, thread: &str) -> PathBuf {
     }
     panic!("no rollout for {thread}")
 }
+
+/// An agent with no shell reaches the control plane through `cones mcp`: each control tool is
+/// the command of the same name, run against the server's own configuration and state.
+#[test]
+fn mcp_control_tools_launch_list_wait_and_stop_a_session_as_the_commands_do() {
+    use std::io::{BufRead, BufReader, Write};
+    let f = Fixture::offering("pi");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cones"))
+        .args([
+            "--jobs",
+            f.jobs.to_str().unwrap(),
+            "--state-dir",
+            f.state().to_str().unwrap(),
+            "mcp",
+        ])
+        .env("HOME", f.path())
+        .env("CONES_TEST_FAST", "1")
+        .env("FAKE_LAUNCH", "ok")
+        .env("CLAUDE_CONFIG_DIR", f.path().join("claude"))
+        .env("PI_CODING_AGENT_DIR", f.path().join("pi"))
+        .env("CODEX_HOME", f.codex_home())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut next = 0;
+    let mut call = |method: &str, params: Value| -> Value {
+        next += 1;
+        writeln!(
+            input,
+            "{}",
+            serde_json::json!({"jsonrpc": "2.0", "id": next, "method": method, "params": params})
+        )
+        .unwrap();
+        if method == "initialize" {
+            writeln!(
+                input,
+                "{}",
+                serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            )
+            .unwrap();
+        }
+        input.flush().unwrap();
+        let mut line = String::new();
+        assert!(output.read_line(&mut line).unwrap() > 0);
+        serde_json::from_str::<Value>(&line).unwrap()["result"].clone()
+    };
+    let tool = |call: &mut dyn FnMut(&str, Value) -> Value, name: &str, arguments: Value| {
+        call(
+            "tools/call",
+            serde_json::json!({"name": name, "arguments": arguments}),
+        )
+    };
+    call(
+        "initialize",
+        serde_json::json!({"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "fixture", "version": "1"}}),
+    );
+
+    let launched = tool(
+        &mut call,
+        "cones_launch",
+        serde_json::json!({"dir": f.work, "harness": "pi", "prompt": "hold this terminal"}),
+    );
+    assert_eq!(launched["isError"], false, "{launched}");
+    let id = launched["structuredContent"]["stdout"]
+        .as_str()
+        .unwrap()
+        .trim()
+        .to_owned();
+    assert!(!id.is_empty(), "{launched}");
+    assert_eq!(launched["content"][0]["text"], id.as_str());
+
+    let listed = tool(&mut call, "cones_ls", serde_json::json!({"dir": f.work}));
+    let rows = listed["structuredContent"]["rows"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r["session"]["session_id"] == id.as_str()),
+        "{listed}"
+    );
+
+    // pi reports no state of its own here, so the wait runs out, which is an answer.
+    let waited = tool(
+        &mut call,
+        "cones_wait",
+        serde_json::json!({"ids": [id], "timeout_seconds": 0.5}),
+    );
+    assert_eq!(waited["isError"], false, "{waited}");
+    assert_eq!(waited["structuredContent"]["timed_out"], true, "{waited}");
+
+    // An argument the command does not take is refused before anything runs.
+    let refused = tool(
+        &mut call,
+        "cones_stop",
+        serde_json::json!({"id": id, "force": true}),
+    );
+    assert_eq!(refused["isError"], true);
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("takes no argument force"),
+        "{refused}"
+    );
+
+    let hosted = f.hosted_pids();
+    let stopped = tool(&mut call, "cones_stop", serde_json::json!({"id": id}));
+    assert_eq!(stopped["isError"], false, "{stopped}");
+    assert!(
+        stopped["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("stopped the cones terminal running pi"),
+        "{stopped}"
+    );
+    for pid in hosted {
+        wait_until("the stopped client to exit", || !alive(pid));
+    }
+    drop(input);
+    child.wait().unwrap();
+}

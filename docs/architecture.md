@@ -27,7 +27,7 @@ Every verb below is a `cones` command, open to any agent with a shell.
 | Verb | Command | Notes |
 | --- | --- | --- |
 | Find | `ls` | Live sessions and runs, by folder |
-| Read | `show`, `search`, `mcp` | Starts nothing |
+| Read | `show`, `search` | Starts nothing |
 | Launch | `launch` | Detached; prints the id |
 | Resume, fork | `resume`, `fork` | Detached; prints the id |
 | Message | `send` | Through the harness's `message` |
@@ -36,6 +36,7 @@ Every verb below is a `cones` command, open to any agent with a shell.
 | Stop | `stop` | Keeps the conversation |
 | Remove | `rm` | Also closes jobs and folders |
 
+`cones mcp` serves every verb as an MCP tool of the same name, for an agent without a shell.
 The verbs read every live session, a job's included. `ls` and the dashboard show a job's
 session as its run row instead. The dashboard and the commands build the same native commands. The dashboard opens resumes
 and forks in its own pane; the commands host them detached. The

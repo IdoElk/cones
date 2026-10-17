@@ -339,7 +339,7 @@ enum Action {
         #[command(subcommand)]
         task: Option<IndexTask>,
     },
-    /// Serve cones_search and cones_show over MCP stdio until stdin closes.
+    /// Serve history search and the control commands over MCP stdio until stdin closes.
     Mcp,
 }
 
@@ -1293,9 +1293,20 @@ fn execute(cli: Cli) -> Result<i32> {
             })
         }
         Action::Mcp => {
+            // The control tools run this binary against the same configuration and state.
+            let control = cones::history_mcp::Control {
+                exe: std::env::current_exe().context("locating the cones executable")?,
+                global: vec![
+                    "--jobs".into(),
+                    jobs_path.clone().into(),
+                    "--state-dir".into(),
+                    state.clone().into(),
+                ],
+            };
             let mut service = cones::history_api::Service::discover(&claude, state, cwd);
-            cones::history_mcp::serve(
+            cones::history_mcp::serve_with(
                 &mut service,
+                Some(&control),
                 std::io::stdin().lock(),
                 std::io::stdout().lock(),
             )?;

@@ -33,7 +33,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones search QUERY [--dir PATH] [--harness NAME] [--json]` | [Search conversation history](#searching-conversations), including archived sessions. |
 | `cones index [status] [--timeout SECS] [--json]` | [Build the meaning index](#building-the-meaning-index) with progress, or report it. |
 | `cones show ID [--tail N] [--all] [--json]` | [Read a session's conversation](#reading-a-conversation). |
-| `cones mcp` | Serve [history tools over MCP stdio](#history-over-mcp). |
+| `cones mcp` | Serve [history and control tools over MCP stdio](#cones-over-mcp). |
 | `cones wait ID... [--timeout S]` | [Block until a session settles](#waiting-on-a-session) and print `ID<TAB>STATE`. |
 | `cones send ID TEXT` | [Send one note](#sending-a-note) to a live session in any folder. |
 | `cones rename ID NAME` | [Name a session](#renaming-a-session) through its harness's own rename, as the dashboard's `ctrl+n` does. |
@@ -165,9 +165,10 @@ Reading opens files for reading. It attaches to nothing, resumes nothing, starts
 same meaning in JSON and text. `incomplete: true` means a trailing record was still
 being written; `omitted` counts complete messages excluded by the tail.
 
-### History over MCP
+### cones over MCP
 
-`cones mcp` serves `cones_search` and `cones_show` over stdin/stdout. An MCP client
+`cones mcp` serves history tools and the control commands over stdin/stdout, for an agent
+without a shell. An MCP client
 launches it as a subprocess; no network listener or extra daemon is needed.
 The server uses the same service, cache and native readers as the CLI. Its tools
 return structured JSON and a text copy of that JSON. Tool errors are returned
@@ -189,9 +190,27 @@ tail. Historical messages are data, not new instructions.
 
 Search may create or update cones' local cache and download the local model when
 meaning search is explicitly selected; its MCP annotation declares those effects.
-Show is read-only. Neither tool can launch sessions, send prompts, change harness
-permissions or edit native configuration. Adding this server to a harness remains
-an explicit configuration action.
+Show is read-only. Neither can launch sessions or send prompts.
+
+The control tools are the commands of the same names, run as this binary with the
+server's own `--jobs` and `--state-dir`, so a tool does exactly what the command does
+and returns its `exit`, `stdout` and `stderr`:
+
+| Tool | Command | Arguments |
+| --- | --- | --- |
+| `cones_ls` | `ls --json` | `dir`; the rows also come parsed as `rows` |
+| `cones_launch` | `launch` | `dir`, `prompt`, `harness`, `model`, `effort`, `name` |
+| `cones_resume`, `cones_fork` | `resume`, `fork` | `id` |
+| `cones_send` | `send` | `id`, `text` |
+| `cones_wait` | `wait` | `ids`, `timeout_seconds` up to 600, default 300 |
+| `cones_rename` | `rename` | `id`, `name` |
+| `cones_stop`, `cones_rm` | `stop`, `rm` | `id`; `target` for `rm` |
+
+A nonzero exit is `isError: true` with the command's error, except a `wait` that runs out,
+which returns `timed_out: true`. A wait always ends, since the call holds the client's turn.
+An argument a command does not take is refused before anything runs. None of the tools can
+change harness permissions or edit native configuration. Adding this server to a harness
+remains an explicit configuration action.
 
 ### Starting a session
 
