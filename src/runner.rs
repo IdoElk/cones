@@ -648,6 +648,23 @@ pub fn run(job: &ResolvedJob, ledger: &Ledger, executable: &Path, trigger: &str)
     Ok(terminal.status)
 }
 
+/// `cones rm RUN`: stop the run if it is still going, then hide its row. `None` when `id` names
+/// no run, so the caller treats it as a session.
+pub fn remove(ledger: &Ledger, claude: &Path, id: &str) -> Result<Option<String>> {
+    let Ok(run) = ledger.resolve(id) else {
+        return Ok(None);
+    };
+    let run_id = run.started.run_id;
+    let stopped = run.terminal.is_none()
+        && run.started.status != crate::ledger::Status::Skipped
+        && stop(ledger, claude, &run_id)?;
+    ledger.hide(&run_id)?;
+    let verb = if stopped { "stopped and hid" } else { "hid" };
+    Ok(Some(format!(
+        "{verb} run {run_id}; its output and ledger record are kept\n"
+    )))
+}
+
 pub fn stop(ledger: &Ledger, claude: &Path, id: &str) -> Result<bool> {
     let Ok(run) = ledger.resolve(id) else {
         return crate::fleet::stop(claude, id);

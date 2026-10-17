@@ -15464,10 +15464,10 @@ impl App {
             .iter()
             .find(|s| s.session_id == id)
             .and_then(|s| {
-                harness::by_name(&s.harness).map(|spec| spec.session(s.kind.as_deref()).stop)
+                harness::by_name(&s.harness).map(|spec| spec.session(s.kind.as_deref()).remove)
             }) {
-            Some(harness::spec::Stop::ForgetClient) => "forget",
-            Some(harness::spec::Stop::Remove) => "delete",
+            Some(harness::spec::Remove::ForgetClient) => "forget",
+            Some(harness::spec::Remove::Native) => "delete",
             _ => "stop",
         }
     }
@@ -15908,28 +15908,33 @@ impl App {
                 }
                 let (state, claude, target) = (self.state.clone(), self.claude.clone(), id.clone());
                 let run = self.data.runs.iter().any(|r| r.started.run_id == id);
-                // Terminate the attached client to release the daemon-held thread; it remains resumable.
-                // No registry lists a Codex client, so signal its pid rather than looking it up.
+                // A session row is removed the way `cones rm` removes it: stopped, then taken off
+                // the harness's own list. The pid is the one captured before the viewer closed.
+                let session = self
+                    .data
+                    .sessions
+                    .iter()
+                    .find(|s| s.session_id == id)
+                    .cloned()
+                    .map(|mut s| {
+                        s.pid = client;
+                        s
+                    });
                 self.queue_stop(id, verb, move || {
-                    if verb == "forget" {
-                        codex::forget(&state, &target)?;
-                        // The daemon keeps the thread's writer lock for minutes after the client
-                        // goes, so dropping the record alone lets the row return on the next start.
-                        Ledger::new(&state)?.hide(&target)?;
-                        if !ended_with_viewer && let Some(pid) = client {
-                            fleet::terminate(pid, "codex")?;
-                        }
-                        Ok(true)
-                    } else if ended_with_viewer {
-                        Ok(true)
-                    } else {
+                    if run {
                         let ledger = Ledger::new(&state)?;
                         let stopped = runner::stop(&ledger, &claude, &target)?;
                         // Stopping a run closes its row too; the ledger keeps the record.
-                        if stopped && run {
+                        if stopped {
                             ledger.hide(&target)?;
                         }
                         Ok(stopped)
+                    } else if ended_with_viewer && verb != "forget" {
+                        Ok(true)
+                    } else {
+                        let session = session.context("the session left the list")?;
+                        crate::stop::remove_session(&state, &claude, &session)?;
+                        Ok(true)
                     }
                 });
             }

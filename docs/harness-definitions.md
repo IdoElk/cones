@@ -82,21 +82,23 @@ operations:
   rename: true
   sessions:
     kinds:
-      bg: {join: attach, stop: remove, lifetime: daemon}
+      bg: {join: attach, remove: native, lifetime: daemon}
 ```
 
 Omitted operations are unavailable. Launch declares arguments, identity handover, initial kind,
 model/provider/effort bindings and a required probe. Other commands have `args` and optional
 `probe`. `sessions.default` covers unknown kinds, defaulting to an own-terminal client with
-signal stop; `kinds` overrides it. Joining requires attach; background resume also requires
-resume. Native handlers sequence multi-step operations and stop on failure.
+no native remove; `kinds` overrides it. Joining requires attach; background resume also
+requires resume. Native handlers sequence multi-step operations and stop on failure.
 
-| Stop declaration | Effect |
+Stop and remove are separate declarations. `cones rm` stops a session, then removes it.
+
+| Declaration | Effect |
 | --- | --- |
-| Session `signal` | Signal a verified client. |
-| Session `remove` | Invoke native removal. |
-| Session `forget_client` | Forget/hide the row and close its client; retain the daemon thread. |
-| `operations.stop` | Native CLI stop preserving conversation history. |
+| `operations.stop` | Native CLI stop of a daemon session, preserving conversation history. |
+| Session `remove: none` | No list beyond the process; a terminal client is stopped by a verified signal. |
+| Session `remove: native` | After the stop, `operations.remove`. |
+| Session `remove: forget_client` | After the stop, forget/hide the row and close its client; retain the daemon thread. |
 
 Owned-terminal stop uses the host separately. `operations.message` supplies native delivery,
 as a command, for Claude only `peer_inbox: {protocols: [...]}`, or for pi and OpenCode

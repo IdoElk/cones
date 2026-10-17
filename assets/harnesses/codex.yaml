@@ -106,7 +106,7 @@ operations:
     args: [unarchive, --, "{id}"]
   sessions:
     kinds:
-      daemon: {join: codex_remote, stop: forget_client, lifetime: daemon}
+      daemon: {join: codex_remote, remove: forget_client, lifetime: daemon}
 viewer:
   peek: existing_daemon
   input_alignment: fixed

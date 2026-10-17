@@ -82,10 +82,10 @@ operations:
       protocols: [1]
   rename: true
   sessions:
-    default: {join: attach, stop: signal, lifetime: daemon}
+    default: {join: attach, remove: none, lifetime: daemon}
     kinds:
-      bg: {join: attach, stop: remove, lifetime: daemon}
-      interactive: {join: unavailable, stop: signal, lifetime: terminal}
+      bg: {join: attach, remove: native, lifetime: daemon}
+      interactive: {join: unavailable, remove: none, lifetime: terminal}
 execution:
   enforcement: supported
   result: supported

@@ -331,9 +331,9 @@ before signaling it. The [CLI stop command](cli.md#stopping-a-session) has narro
 
 | Session | Open | Dashboard stop/removal |
 | --- | --- | --- |
-| Claude background | Native attach. Settled jobs require explicit entry because attach wakes them. | `claude rm` removes the job record, preserving its transcript. A signal alone permits daemon respawn. When `claude rm` keeps a session for unpushed worktree commits, cones discards the worktree only if it is clean and another branch already holds its head; otherwise the delete fails and names the unmerged work. |
+| Claude background | Native attach. Settled jobs require explicit entry because attach wakes them. | `claude stop`, then `claude rm` removes the job record; a refused stop removes nothing. `claude rm` preserves the transcript. A signal alone permits daemon respawn. When `claude rm` keeps a session for unpushed worktree commits, cones discards the worktree only if it is clean and another branch already holds its head; otherwise the delete fails and names the unmerged work. |
 | External interactive client | Refused: own terminal. | SIGTERM to the verified process. |
-| Codex daemon thread | Remote native resume, including with another client attached. | Hide/forget its saved row and close its client. This does not stop the daemon thread. |
+| Codex daemon thread | Remote native resume, including with another client attached. | Stop its turn and background terminals through the daemon when one runs, then hide/forget its saved row and close its client. The daemon keeps the thread. |
 | Owned interactive terminal | Reconnect to its host. | Stop the host and client. |
 | Supervised run | Join a live session or follow output. | Stop the native session and worker group. |
 | Finished Claude run | Join if live, otherwise background resume and attach. | Hide the run; retain output. |

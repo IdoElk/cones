@@ -917,10 +917,8 @@ fn execute(cli: Cli) -> Result<i32> {
                     .rev()
                     .find(|r| r.started.job.as_deref() == Some(&target) && r.status() == "started")
                 {
-                    print!(
-                        "{}",
-                        cones::stop::remove(&state, &claude, &[], &run.started.run_id)?
-                    );
+                    let removed = cones::runner::remove(&ledger, &claude, &run.started.run_id)?;
+                    print!("{}", removed.unwrap_or_default());
                     return Ok(0);
                 }
                 config::write_job(&jobs_path, Some(&target), None)?;
@@ -960,7 +958,11 @@ fn execute(cli: Cli) -> Result<i32> {
             } else {
                 target
             };
-            print!("{}", cones::stop::remove(&state, &claude, &rows, &id)?);
+            // A run is the jobs client's row; every other id is a session.
+            match cones::runner::remove(&ledger, &claude, &id)? {
+                Some(removed) => print!("{removed}"),
+                None => print!("{}", cones::stop::remove(&state, &claude, &rows, &id)?),
+            }
             Ok(0)
         }
         Action::Skill { name } => {

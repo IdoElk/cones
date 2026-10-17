@@ -754,7 +754,7 @@ pub enum Version {
 #[serde(deny_unknown_fields)]
 pub struct SessionKind {
     pub join: Join,
-    pub stop: Stop,
+    pub remove: Remove,
     pub lifetime: Lifetime,
 }
 
@@ -762,7 +762,7 @@ impl Default for SessionKind {
     fn default() -> Self {
         Self {
             join: Join::Unavailable,
-            stop: Stop::Signal,
+            remove: Remove::None,
             lifetime: Lifetime::Terminal,
         }
     }
@@ -778,9 +778,14 @@ pub enum Join {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Stop {
-    Signal,
-    Remove,
+/// What `cones rm` does after the session is stopped, to take it off the harness's own list.
+/// Stopping is separate: `operations.stop`, the daemon or the host, by lifetime.
+pub enum Remove {
+    /// The harness keeps no list of its own beyond the live process.
+    None,
+    /// `operations.remove`, such as `claude rm`.
+    Native,
+    /// Forget the thread's client record and hide the row; the daemon keeps the thread.
     ForgetClient,
 }
 
@@ -1276,7 +1281,7 @@ impl HarnessSpec {
                 "missing attach command"
             );
             ensure!(
-                kind.stop != Stop::Remove || !self.commands.remove.is_empty(),
+                kind.remove != Remove::Native || !self.commands.remove.is_empty(),
                 "missing remove command"
             );
             ensure!(
@@ -1288,7 +1293,7 @@ impl HarnessSpec {
                 "join capability has no matching native handler"
             );
             ensure!(
-                kind.stop != Stop::ForgetClient || self.discovery.handler == Native::Codex,
+                kind.remove != Remove::ForgetClient || self.discovery.handler == Native::Codex,
                 "forgetting a client requires a native thread handler"
             );
         }

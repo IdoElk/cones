@@ -1012,26 +1012,41 @@ fn ready(host: &mut Host) -> serde_json::Value {
     reply
 }
 
-/// `cones rm` on a settled background session is the dashboard's confirmed `ctrl+x`: the native
-/// `claude rm` in the session's home, by prefix, with the transcript left and nothing signalled.
+/// `cones rm` on a background session is the dashboard's confirmed `ctrl+x`: the native
+/// `claude stop`, then the native `claude rm`, both in the session's home, by prefix, with the
+/// transcript left and nothing signalled. A stop the harness refuses fails the remove, and
+/// `claude rm` is never asked.
 #[test]
-fn rm_removes_a_background_session_record_and_keeps_its_transcript() {
+fn rm_stops_then_removes_a_background_session_and_keeps_its_transcript() {
     let f = Fixture::new();
     fs::write(f.home().join("allow-rm"), "").unwrap();
     let id = "dddddddd-4444-4444-8444-444444444444";
     let idle = Idle::new();
     f.live(id, "bg", idle.0.id());
     let transcript = f.transcript(id);
+    let home = f.home().display().to_string();
 
+    fs::write(f.home().join("refuse"), "").unwrap();
+    let out = f.cones(&["rm", "dddddddd"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
+    assert!(
+        text(&out.stderr).contains(&format!("{id} was not stopped, so it was not removed")),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(f.calls().trim(), format!("stop dddddddd {home}"));
+    assert!(f.rows().iter().any(|r| r["session"]["session_id"] == id));
+
+    fs::remove_file(f.home().join("refuse")).unwrap();
     let out = f.cones(&["rm", "dddddddd"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(
         text(&out.stdout),
-        format!("removed claude session {id}; its transcript is kept\n")
+        format!("stopped and removed claude session {id}; its transcript is kept\n")
     );
     assert_eq!(
         f.calls().trim(),
-        format!("rm dddddddd {}", f.home().display())
+        format!("stop dddddddd {home}\nstop dddddddd {home}\nrm dddddddd {home}")
     );
     assert!(
         transcript.exists(),
@@ -1063,7 +1078,10 @@ fn rm_signals_an_interactive_client_and_hides_a_finished_run() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(
         text(&out.stdout),
-        format!("stopped claude session {id}; its conversation is kept\n")
+        format!(
+            "stopped claude session {id}; claude keeps no list of its own to remove it from, so \
+             its row leaves with its process and its conversation is kept\n"
+        )
     );
     let ended = client.wait().unwrap();
     assert_eq!(
@@ -1171,7 +1189,7 @@ fn rm_forgets_a_codex_thread_and_keeps_its_rollout() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(
         text(&out.stdout),
-        format!("forgot codex thread {id}; it stays resumable from history\n")
+        format!("stopped and forgot codex thread {id}; it stays resumable from history\n")
     );
     let saved = fs::read_to_string(f.state().join("codex-threads.json")).unwrap();
     assert!(!saved.contains(id), "{saved}");

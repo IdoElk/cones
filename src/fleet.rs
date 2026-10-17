@@ -1902,49 +1902,58 @@ pub fn stop(claude: &Path, session_id: &str) -> Result<bool> {
     // Use `claude rm`: the daemon respawns killed workers, and `stop` leaves a job record.
     // The transcript remains resumable.
     let spec = crate::harness::by_name(&session.harness).context("unknown session harness")?;
-    if spec.session(session.kind.as_deref()).stop == crate::harness::spec::Stop::Remove {
-        crate::harness::check_operation(spec, &spec.operations.remove, "remove")?;
-        let home = spec.session_home(claude, &session);
-        let claude = crate::harness::executable(&spec.name, &crate::harness::launch_path())
-            .with_context(|| format!("{} not found", spec.name))?;
-        let short = session_id.get(..8).context("invalid session id")?;
-        let args = crate::harness::spec::args(
-            &spec.commands.remove,
-            &[("id", session_id.as_ref()), ("short_id", short.as_ref())],
-        )?;
-        let rm = |extra: &[&str]| {
-            let mut command = Command::new(&claude);
-            spec.home.set_command_home(&mut command, &home);
-            command
-                .args(&args)
-                .args(extra)
-                .stdin(Stdio::null())
-                .output()
-        };
-        let mut out = rm(&[])?;
-        let refusal = String::from_utf8_lossy(&out.stderr).into_owned();
-        let kept_worktree = refusal.contains("--discard-unpushed ");
-        if !out.status.success()
-            && let Some(token) = merged_discard(&refusal)
-        {
-            out = rm(&["--discard-unpushed", &token])?;
-        }
-        if !out.status.success() {
-            let native = anyhow::anyhow!(
-                "claude rm: {}{}",
-                String::from_utf8_lossy(&out.stdout).trim(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-            return Err(if kept_worktree {
-                native.context("worktree has unmerged work; merge it, then delete again")
-            } else {
-                native
-            });
-        }
+    if spec.session(session.kind.as_deref()).remove == crate::harness::spec::Remove::Native {
+        remove_native(claude, &session)?;
         return Ok(true);
     }
     let pid = session.pid.context("session has no harness pid")?;
     terminate(pid, &session.harness)
+}
+
+/// The harness's own remove, `operations.remove`, which takes the session off its own list.
+/// Its transcript remains resumable.
+pub fn remove_native(claude: &Path, session: &Session) -> Result<()> {
+    let session_id = session.session_id.as_str();
+    let spec = crate::harness::by_name(&session.harness).context("unknown session harness")?;
+    crate::harness::check_operation(spec, &spec.operations.remove, "remove")?;
+    let home = spec.session_home(claude, session);
+    let claude = crate::harness::executable(&spec.name, &crate::harness::launch_path())
+        .with_context(|| format!("{} not found", spec.name))?;
+    let short = session_id.get(..8).context("invalid session id")?;
+    let args = crate::harness::spec::args(
+        &spec.commands.remove,
+        &[("id", session_id.as_ref()), ("short_id", short.as_ref())],
+    )?;
+    let rm = |extra: &[&str]| {
+        let mut command = Command::new(&claude);
+        spec.home.set_command_home(&mut command, &home);
+        command
+            .args(&args)
+            .args(extra)
+            .stdin(Stdio::null())
+            .output()
+    };
+    let mut out = rm(&[])?;
+    let refusal = String::from_utf8_lossy(&out.stderr).into_owned();
+    let kept_worktree = refusal.contains("--discard-unpushed ");
+    if !out.status.success()
+        && let Some(token) = merged_discard(&refusal)
+    {
+        out = rm(&["--discard-unpushed", &token])?;
+    }
+    if !out.status.success() {
+        let native = anyhow::anyhow!(
+            "claude rm: {}{}",
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return Err(if kept_worktree {
+            native.context("worktree has unmerged work; merge it, then delete again")
+        } else {
+            native
+        });
+    }
+    Ok(())
 }
 
 /// The discard token from a `claude rm` refusal to delete a worktree with unpushed commits,

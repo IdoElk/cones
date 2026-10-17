@@ -328,6 +328,10 @@ Copilot, Amp, Droid, Kimi) and an ambiguous or unknown id fail without changing 
 open folder's path (anything with a `/` or starting with `~`), or a run or session id or
 unambiguous prefix from `cones ls`.
 
+A session is stopped first, then removed from the harness's own list. If the stop fails,
+nothing is removed and the command exits 1. Runs and jobs belong to the
+[jobs client](architecture.md#jobs), folders to the dashboard.
+
 | Target | Operation |
 | --- | --- |
 | Running run | Stopped, recorded `stopped`, and hidden. |
@@ -335,9 +339,9 @@ unambiguous prefix from `cones ls`.
 | Running job | Its run stopped and hidden; the job stays. |
 | Idle job | Deleted from `jobs.yaml`, the rest of the file as written, then schedules reinstalled. |
 | Cones terminal | Host and client stopped. |
-| Claude background | Native `claude rm`, as the [dashboard](harness.md#native-actions) runs it; the transcript remains. |
-| Codex daemon thread | Forgotten and hidden, its client closed; the thread stays resumable from history. |
-| Other session | SIGTERM to the process, once it is verified to be that harness's. |
+| Claude background | [`cones stop`](#stopping-a-session), then native `claude rm`, which takes it off `claude agents`, as the [dashboard](harness.md#native-actions) runs it; the transcript remains. |
+| Codex daemon thread | Stopped through its daemon when one runs, then forgotten and hidden, its client closed; the thread stays resumable from history. |
+| Other session | SIGTERM to the process, once it is verified to be that harness's. The harness keeps no list to remove it from, and the output says so. |
 | Open folder | Closed; the directory and any pin remain. A running dashboard drops the row on its next refresh. |
 
 ## Coordinator

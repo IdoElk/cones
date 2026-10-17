@@ -190,28 +190,15 @@ fn host(
     Ok((hosts.pop(), session))
 }
 
-/// `cones rm ID`: what the dashboard's confirmed `ctrl+x` does to the row `id` names. A run is
-/// stopped if it is still going and hidden; a cones terminal is stopped; a Claude background
-/// session loses its job record; a Codex thread is forgotten; any other session is sent the
-/// verified signal the dashboard sends. Conversations and output stay.
+/// `cones rm ID` for a session: what the dashboard's confirmed `ctrl+x` does to its row. A cones
+/// terminal is stopped; any other session goes through [`remove_session`]. Runs belong to the
+/// jobs client, `runner::remove`. Conversations and output stay.
 pub fn remove(
     state: &Path,
     claude: &Path,
     rows: &[crate::fleet::Session],
     id: &str,
 ) -> Result<String> {
-    let ledger = crate::ledger::Ledger::new(state)?;
-    if let Ok(run) = ledger.resolve(id) {
-        let run_id = run.started.run_id;
-        let stopped = run.terminal.is_none()
-            && run.started.status != crate::ledger::Status::Skipped
-            && crate::runner::stop(&ledger, claude, &run_id)?;
-        ledger.hide(&run_id)?;
-        let verb = if stopped { "stopped and hid" } else { "hid" };
-        return Ok(format!(
-            "{verb} run {run_id}; its output and ledger record are kept\n"
-        ));
-    }
     if let (Some(record), _) = host(state, claude, id)? {
         crate::terminal_host::stop(&record)
             .with_context(|| format!("stopping the cones terminal for {id}"))?;
@@ -224,36 +211,60 @@ pub fn remove(
         .iter()
         .find(|s| s.session_id == id)
         .with_context(|| format!("no run or session {id}"))?;
+    remove_session(state, claude, session)
+}
+
+/// Take one live session off every list: stop it, then remove it through the harness's own
+/// remove. A stop that fails fails the remove, and nothing is removed. A harness with no remove
+/// of its own is only stopped, and the line says so. The transcript stays either way.
+pub fn remove_session(
+    state: &Path,
+    claude: &Path,
+    session: &crate::fleet::Session,
+) -> Result<String> {
+    let id = session.session_id.as_str();
     let spec = harness::by_name(&session.harness).context("unknown session harness")?;
-    match spec.session(session.kind.as_deref()).stop {
-        harness::spec::Stop::Remove => {
-            crate::fleet::stop(claude, id)?;
-            Ok(format!(
-                "removed {} session {id}; its transcript is kept\n",
+    let kind = spec.session(session.kind.as_deref());
+    let not_removed = || format!("{id} was not stopped, so it was not removed");
+    if kind.remove == harness::spec::Remove::ForgetClient
+        && crate::codex::daemon_pid(&harness::home_of(session, claude)).is_none()
+    {
+        // A saved thread with no daemon running has nothing running to stop. `cones stop`
+        // reports the missing daemon instead, since it was asked to end work.
+    } else if kind.lifetime == harness::spec::Lifetime::Daemon {
+        self::session(state, claude, id).with_context(not_removed)?;
+    } else {
+        // A client in someone's terminal gets the dashboard's stop: the process is checked to be
+        // this harness's before the signal. One that already ended is stopped all the same.
+        let pid = session.pid.with_context(not_removed)?;
+        crate::fleet::terminate(pid, &spec.name).with_context(not_removed)?;
+    }
+    Ok(match kind.remove {
+        harness::spec::Remove::Native => {
+            // The harness's own refusal is the useful line, such as a worktree with unmerged work.
+            crate::fleet::remove_native(claude, session)?;
+            format!(
+                "stopped and removed {} session {id}; its transcript is kept\n",
                 spec.name
-            ))
+            )
         }
-        harness::spec::Stop::ForgetClient => {
+        harness::spec::Remove::ForgetClient => {
             crate::codex::forget(state, id)?;
             // The daemon holds the thread for minutes after its client goes, so the saved record
             // alone would bring the row back.
-            ledger.hide(id)?;
+            crate::ledger::Ledger::new(state)?.hide(id)?;
             if let Some(pid) = session.pid {
                 crate::fleet::terminate(pid, &spec.name)?;
             }
-            Ok(format!(
-                "forgot {} thread {id}; it stays resumable from history\n",
-                spec.name
-            ))
-        }
-        // The dashboard's stop: the process is checked to be this harness's before the signal.
-        harness::spec::Stop::Signal => Ok(if crate::fleet::stop(claude, id)? {
             format!(
-                "stopped {} session {id}; its conversation is kept\n",
+                "stopped and forgot {} thread {id}; it stays resumable from history\n",
                 spec.name
             )
-        } else {
-            format!("{} session {id} had already ended\n", spec.name)
-        }),
-    }
+        }
+        harness::spec::Remove::None => format!(
+            "stopped {} session {id}; {} keeps no list of its own to remove it from, so its \
+             row leaves with its process and its conversation is kept\n",
+            spec.name, spec.name
+        ),
+    })
 }
