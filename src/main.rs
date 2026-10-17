@@ -194,6 +194,12 @@ enum Action {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
         id: String,
     },
+    /// One note to any live session, through its own harness's delivery; see docs/cli.md.
+    Send {
+        /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
+        id: String,
+        text: String,
+    },
     /// Name a session through its harness's own rename, as the dashboard's ctrl+n does; see
     /// docs/cli.md.
     Rename {
@@ -858,6 +864,25 @@ fn execute(cli: Cli) -> Result<i32> {
             let ids = rows.into_iter().map(|s| s.session_id);
             let id = by_prefix(ids, &id)?;
             print!("{}", cones::stop::session(&state, &claude, &id)?);
+            Ok(0)
+        }
+        Action::Send { id, text } => {
+            let rows = cones::tui::fleet_rows(
+                &claude,
+                &state,
+                &Ledger::new(&state)?.runs()?,
+                &config::defaults(&jobs_path),
+            )?;
+            let ids = rows.iter().map(|s| s.session_id.clone());
+            let id = if id.len() >= 4 {
+                by_prefix(ids, &id)?
+            } else {
+                id
+            };
+            print!(
+                "{}",
+                cones::coordinator::send_direct(&state, &claude, &rows, &id, &text)?
+            );
             Ok(0)
         }
         Action::Rename { id, name } => {

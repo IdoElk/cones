@@ -30,7 +30,7 @@ Every verb below is a `cones` command, open to any agent with a shell.
 | Read | `show`, `search`, `mcp` | Starts nothing |
 | Launch | `launch` | Detached; prints the id |
 | Resume, fork | `resume`, `fork` | Detached; prints the id |
-| Message | `comms send` | Through the harness's `message` |
+| Message | `send` | Through the harness's `message` |
 | Rename | `rename` | The harness's own rename |
 | Stop | `stop` | Keeps the conversation |
 | Remove | `rm` | Also closes jobs and folders |

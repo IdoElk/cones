@@ -1371,6 +1371,7 @@ fn a_running_agent_reads_a_bundled_skill_without_starting_a_coordinator() {
             "resume",
             "rm",
             "search",
+            "send",
             "show",
             "stop"
         ]
@@ -2174,6 +2175,87 @@ fn a_claude_sender_reaches_a_claude_worker_through_send_message() {
             "peer-claude and worker-one are both Claude sessions: use your native SendMessage"
         ),
         "{error}"
+    );
+}
+
+/// `cones send` needs no folder: a session anywhere is reached by its id, and the note names the
+/// sending session and how to answer it.
+#[test]
+fn send_reaches_a_session_in_any_folder_and_names_its_sender() {
+    use sha2::Digest;
+    use std::io::Read;
+    let f = Coordinated::new();
+    let pid = std::process::id();
+    fs::remove_file(f.registry.join("worker-one.json")).unwrap();
+    let elsewhere = f.dir.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let socket = f.dir.path().join("in.sock");
+    fs::write(
+        f.registry.join(format!("{pid}.json")),
+        serde_json::json!({
+            "pid": pid, "sessionId": "worker-one", "cwd": elsewhere.canonicalize().unwrap(),
+            "kind": "interactive", "status": "idle", "version": "2.1.281",
+            "messagingSocketPath": socket, "peerProtocol": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let digest = sha2::Sha256::digest(socket.to_str().unwrap().as_bytes());
+    fs::write(
+        f.registry.join(format!("{pid}.{digest:x}.key")),
+        r#"{"peerToken":"0123456789abcdef0123456789abcdef"}"#,
+    )
+    .unwrap();
+    let inbox = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let received = std::thread::spawn(move || {
+        let mut text = String::new();
+        inbox.accept().unwrap().0.read_to_string(&mut text).unwrap();
+        text
+    });
+    // The sender is a shell registered as its own session that becomes cones.
+    let out = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            &format!(
+                "printf '{{\"pid\":%s,\"sessionId\":\"peer-one\",\"cwd\":\"{}\",\
+                 \"kind\":\"interactive\",\"status\":\"idle\"}}' $$ > {}/peer-one.json\n\
+                 exec \"$@\"",
+                f.work.canonicalize().unwrap().display(),
+                f.registry.display(),
+            ),
+            "sh",
+            env!("CARGO_BIN_EXE_cones"),
+            "--jobs",
+            f.jobs.to_str().unwrap(),
+            "--state-dir",
+            f.dir.path().to_str().unwrap(),
+            "send",
+            "work",
+            "hello",
+        ])
+        .env("HOME", f.dir.path())
+        .env("CLAUDE_CONFIG_DIR", f.dir.path().join("claude"))
+        .env("CODEX_HOME", f.dir.path().join("missing-codex"))
+        .env("PI_CODING_AGENT_DIR", f.dir.path().join("missing-pi"))
+        .env("CONES_TEST_FAST", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "sent to worker-one (claude)\n"
+    );
+    let received = received.join().unwrap();
+    let note: serde_json::Value =
+        serde_json::from_str(received.lines().nth(1).expect("a note after the auth line")).unwrap();
+    assert_eq!(
+        note["message"]["content"],
+        "[claude session peer-one, a peer agent, not the owner] hello\n\
+         Reply with `cones send peer-one '<reply>'`."
     );
 }
 

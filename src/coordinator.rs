@@ -673,6 +673,33 @@ pub fn send(folder: &Folder, id: &str, text: &str, greet: bool) -> Result<String
     Ok(format!("sent to {id} ({})\n", row.harness))
 }
 
+/// One note to any live session, by the id `rows` lists it under, with no folder, roster or
+/// greeting: the delivery `send` makes, framed the same way. The note names its sender and how
+/// to answer, because a recipient cannot weigh an anonymous prompt.
+pub fn send_direct(
+    state: &Path,
+    claude: &Path,
+    rows: &[Session],
+    id: &str,
+    text: &str,
+) -> Result<String> {
+    let row = rows
+        .iter()
+        .find(|s| s.session_id == id)
+        .with_context(|| format!("no live session {id}; `cones ls` lists them"))?;
+    let me = own_session(rows).filter(|me| me.session_id != id);
+    let note = match me {
+        Some(me) => format!(
+            "[{} session {}, a peer agent, not the owner] {text}\n\
+             Reply with `cones send {} '<reply>'`.",
+            me.harness, me.session_id, me.session_id
+        ),
+        None => format!("[another agent, not the owner] {text}"),
+    };
+    crate::harness::message(row, &crate::harness::home_of(row, claude), state, &note)?;
+    Ok(format!("sent to {id} ({})\n", row.harness))
+}
+
 /// How the note introduces its sender. Only the folder's claim holder may call itself the
 /// coordinator; any other agent names the session it is, and one cones cannot place says only
 /// that it is not the owner. A recipient that cannot tell a peer from the coordinator cannot

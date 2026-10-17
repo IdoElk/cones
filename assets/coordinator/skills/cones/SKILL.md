@@ -22,7 +22,9 @@ built on the same commands, so you can reach as far as the owner does.
    whoever launched it; a separate project under it is not on it, and you need not be on it. A reply comes back into your conversation, because the
    note tells the recipient to `send` it to you. One that could not be sent lands in the folder's
    inbox: `cones comms --dir PATH wait` blocks until one lands, `mail` prints it, and
-   `mail --ack N` marks it handled.
+   `mail --ack N` marks it handled. For one session in any folder, with no roster or inbox,
+   `cones send ID TEXT` delivers a note naming you; between two Claude sessions SendMessage is
+   still the channel to use.
 3. **Start new work.** Launch a session in any folder on any enabled harness, the way the
    owner's dashboard does, and get its id back. `cones launch --dir PATH --harness NAME PROMPT`
    runs detached, needs no terminal and prints the id on stdout; give it the whole task as

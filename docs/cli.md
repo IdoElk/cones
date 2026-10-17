@@ -34,6 +34,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones index [status] [--timeout SECS] [--json]` | [Build the meaning index](#building-the-meaning-index) with progress, or report it. |
 | `cones show ID [--tail N] [--all] [--json]` | [Read a session's conversation](#reading-a-conversation). |
 | `cones mcp` | Serve [history tools over MCP stdio](#history-over-mcp). |
+| `cones send ID TEXT` | [Send one note](#sending-a-note) to a live session in any folder. |
 | `cones rename ID NAME` | [Name a session](#renaming-a-session) through its harness's own rename, as the dashboard's `ctrl+n` does. |
 | `cones stop ID` | [Stop a session](#stopping-a-session) and keep its conversation. |
 | `cones rm TARGET` | Do to a run, session, job or folder what the dashboard's [`ctrl+x` twice](#removing-a-row) does. |
@@ -269,6 +270,19 @@ open it later. Neither takes a prompt; `cones comms send` gives the session work
   parent is recorded and the dashboard lists it under that parent. A harness with no verified
   native fork is refused. Codex forks are named only in the dashboard, so `cones fork`
   refuses them.
+
+### Sending a note
+
+```sh
+cones send 5bf8392e "rebase onto main when the tests pass"
+```
+
+Delivers one note to the live session the id names, wherever it works, through its harness's
+native [message operation](harness.md#message-delivery); a harness without one is refused. The
+id is one `cones ls` prints, or a prefix of four or more characters. The note names its
+sender: a session cones can place is named with a line telling the recipient to answer with
+`cones send` to it, and anything else is "another agent, not the owner". There is no folder,
+roster, greeting or inbox; [`cones comms`](#comms) adds those for agents sharing a folder.
 
 ### Stopping a session
 
