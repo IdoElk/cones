@@ -11280,7 +11280,6 @@ impl App {
                 })
             });
         }
-        let history_browsing = self.history_selected();
         if self.status.contains("reload failed:") {
             self.status.clear();
         }
@@ -11473,19 +11472,6 @@ impl App {
                 );
             }
         }
-        let arrived = data
-            .sessions
-            .iter()
-            .filter(|s| {
-                !replaced.values().any(|id| id == &s.session_id)
-                    && !self
-                        .data
-                        .sessions
-                        .iter()
-                        .any(|o| o.session_id == s.session_id)
-            })
-            .max_by_key(|s| s.started)
-            .map(|s| s.session_id.clone());
         for (old, new) in &replaced {
             if old != new {
                 self.event("debug", "row.reidentified", || {
@@ -11526,8 +11512,6 @@ impl App {
                 self.cursor = i;
                 self.settle();
             }
-        } else if !history_browsing && let Some(id) = arrived {
-            self.select_new(&id);
         }
         self.refreshed = Instant::now();
         self.report_view("refresh");
@@ -20670,7 +20654,7 @@ states:
     }
 
     #[test]
-    fn a_session_that_just_appeared_takes_the_cursor() {
+    fn only_a_dashboard_launch_takes_the_cursor() {
         let dir = tempfile::tempdir().unwrap();
         let claude = dir.path();
         let cwd = claude.to_str().unwrap();
@@ -20680,18 +20664,12 @@ states:
         assert_eq!(key(&app).as_deref(), Some(A));
         registry(claude, B, cwd, "idle", 1_757_682_872_000);
         app.refresh().unwrap();
-        assert_eq!(key(&app).as_deref(), Some(B), "the new row is selected");
-        app.text = "fix it".into();
-        registry(claude, C, cwd, "idle", 1_757_682_873_000);
-        app.refresh().unwrap();
-        assert_eq!(key(&app).as_deref(), Some(B), "typing holds the cursor");
-        app.text.clear();
-        app.refresh().unwrap();
         assert_eq!(
             key(&app).as_deref(),
-            Some(B),
-            "a row seen once is not new again"
+            Some(A),
+            "a session started elsewhere leaves the cursor"
         );
+        app.select_row(B);
         let session = placeholder(HarnessKind::Claude, "starting:1", claude, "again");
         app.data.sessions.push(session.clone());
         app.pending.push(Pending {
@@ -24007,7 +23985,7 @@ while True:
             native_id: None,
         });
         app.apply(data);
-        app.settle();
+        app.select_row(B);
         assert_eq!(key(&app).as_deref(), Some(B));
         rested(&mut app, B, OLD);
         assert!(App::joinable(&app.data.sessions[0]), "the row is joinable");
