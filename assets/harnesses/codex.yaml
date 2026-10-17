@@ -107,6 +107,12 @@ operations:
   sessions:
     kinds:
       daemon: {join: codex_remote, remove: forget_client, lifetime: daemon}
+execution:
+  # A job is a daemon thread started like `cones launch` starts one, unattended through
+  # --dangerously-bypass-approvals-and-sandbox (codex_full_access: true), watched through the
+  # rollout's own task states. Codex reports no separate request for input.
+  enforcement: supported
+  result: supported
 viewer:
   peek: existing_daemon
   input_alignment: fixed

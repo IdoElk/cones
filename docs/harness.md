@@ -473,10 +473,12 @@ so a different provider region requires another native home. Permissions remain 
 
 ### Supervised execution
 
-Only Claude has an execution adapter, validating native version `>=2.1, <3` and required flags
-before using the [run contract](jobs.md#what-the-harness-is-told). Jobs selecting any other
-harness are rejected when read. Codex, pi and OpenCode supervised execution and native
-completion/enforcement support remain unverified. Discovery and interactive controls do not
+Claude and Codex have execution adapters. Claude validates native version `>=2.1, <3` and
+required flags before using the [run contract](jobs.md#what-the-harness-is-told). A Codex job
+is a daemon thread started the way `cones launch` starts one; it was verified on Codex 0.163
+for a manual and a scheduled run, a timeout, a stop and an orphaned supervisor. Codex reports
+no separate request for input, so a Codex run never ends `input`. Jobs selecting any other
+harness are rejected when read; pi and OpenCode supervised execution remain unverified. Discovery and interactive controls do not
 require an execution adapter. See [integration requirements](harness-definitions.md#changing-or-adding-a-harness).
 
 ## Additional terminal harnesses

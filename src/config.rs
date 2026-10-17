@@ -1715,7 +1715,7 @@ fn resolve(j: Job, d: &Policy, base: &Path) -> Result<ResolvedJob> {
     // such job used to abort the whole file's schedules with a message naming no job.
     ensure!(
         crate::harness::executes(kind),
-        "job {}: cones cannot supervise a run on {kind}. Only {} runs jobs; {kind} is still \
+        "job {}: cones cannot supervise a run on {kind}. Jobs run on {}; {kind} is still \
          yours to start from the composer",
         j.name,
         crate::harness::executing()
@@ -1732,6 +1732,14 @@ fn resolve(j: Job, d: &Policy, base: &Path) -> Result<ResolvedJob> {
     ensure!(
         !full || !claude,
         "job {}: codex_full_access applies only to Codex",
+        j.name
+    );
+    // Codex runs unattended only with the flag that also lifts its sandbox (rule 2).
+    ensure!(
+        kind != HarnessKind::Codex || full,
+        "job {}: a Codex job needs codex_full_access: true. Codex runs unattended only with \
+         --dangerously-bypass-approvals-and-sandbox, which also lifts its sandbox; without it \
+         the run would wait on approvals nobody answers",
         j.name
     );
     let timeout = j.timeout_min.or(d.timeout_min).unwrap_or(30.0);
@@ -1973,7 +1981,7 @@ mod tests {
     #[test]
     fn a_job_on_a_harness_cones_cannot_supervise_is_refused_by_name() {
         let (_d, p) = file(
-            "version: 4\njobs:\n  - name: nightly\n    schedule: \"0 9 * * *\"\n    harness: codex\n    cwd: .\n    prompt: p\n",
+            "version: 4\njobs:\n  - name: nightly\n    schedule: \"0 9 * * *\"\n    harness: pi\n    cwd: .\n    prompt: p\n",
         );
         let e = format!("{:#}", read_jobs(&p).unwrap_err());
         assert!(
@@ -1981,13 +1989,26 @@ mod tests {
             "the job that stopped the file is named: {e}"
         );
         assert!(
-            e.contains("cones cannot supervise a run on codex"),
+            e.contains("cones cannot supervise a run on pi"),
             "the refusal names the harness: {e}"
         );
         assert!(
-            e.contains("Only claude runs jobs"),
+            e.contains("Jobs run on claude, codex"),
             "and the fix is in the message: {e}"
         );
+        // A Codex job runs only unattended, which Codex grants only with full access.
+        let (_d, p) = file(
+            "version: 4\njobs:\n  - name: nightly\n    schedule: \"0 9 * * *\"\n    harness: codex\n    cwd: .\n    prompt: p\n",
+        );
+        let e = format!("{:#}", read_jobs(&p).unwrap_err());
+        assert!(
+            e.contains("job nightly: a Codex job needs codex_full_access: true"),
+            "{e}"
+        );
+        let (_d, p) = file(
+            "version: 4\njobs:\n  - name: nightly\n    schedule: \"0 9 * * *\"\n    harness: codex\n    codex_full_access: true\n    cwd: .\n    prompt: p\n",
+        );
+        assert_eq!(read_jobs(&p).unwrap()[0].harness, HarnessKind::Codex);
         // The same refusal covers a harness reaching a job through defaults, not only a job line.
         let (_d, p) = file(
             "version: 4\ndefaults:\n  harness: opencode\njobs:\n  - name: nightly\n    schedule: \"0 9 * * *\"\n    cwd: .\n    prompt: p\n",

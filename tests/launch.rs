@@ -1317,3 +1317,131 @@ fn wait_returns_when_a_named_session_settles_including_a_job_s() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), format!("{id}\tidle"));
 }
+
+impl Fixture {
+    /// A Codex job named `name` in the fixture's folder, unattended as Codex jobs must be.
+    fn codex_job(&self, name: &str, timeout_min: f64) {
+        let jobs = fs::read_to_string(&self.jobs).unwrap().replace(
+            "jobs: []\n",
+            &format!(
+                "jobs:\n  - name: {name}\n    schedule: \"0 3 * * *\"\n    harness: codex\n    \
+                 codex_full_access: true\n    timeout_min: {timeout_min}\n    cwd: {}\n    \
+                 prompt: \"triage the flaky tests\"\n",
+                self.work.display()
+            ),
+        );
+        fs::write(&self.jobs, jobs).unwrap();
+    }
+
+    /// `cones run NAME`, started in the background so the test can move its thread along.
+    fn run_job(&self, name: &str) -> std::process::Child {
+        Command::new(env!("CARGO_BIN_EXE_cones"))
+            .args([
+                "--jobs",
+                self.jobs.to_str().unwrap(),
+                "--state-dir",
+                self.state().to_str().unwrap(),
+                "run",
+                name,
+            ])
+            .env("HOME", self.path())
+            .env("CONES_TEST_FAST", "1")
+            .env("CLAUDE_CONFIG_DIR", self.path().join("claude"))
+            .env("PI_CODING_AGENT_DIR", self.path().join("pi"))
+            .env("CODEX_HOME", self.codex_home())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    /// The run rows `cones ls --json` prints for the fixture.
+    fn runs(&self) -> Vec<Value> {
+        let out = self.cones("ok", &["ls", "--json"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|row| row["kind"] == "run")
+            .collect()
+    }
+}
+
+/// A Codex job is a daemon thread started the way `cones launch` starts one. The run is
+/// recorded under the thread the daemon made, ends `ok` when the rollout reports the turn
+/// complete, and takes the thread off the list as it ends: stopped through the daemon, then
+/// forgotten. The rollout stays.
+#[test]
+fn a_codex_job_runs_as_a_daemon_thread_and_ends_with_its_turn() {
+    let f = Fixture::codex();
+    let calls = crate::stop::codex_daemon_in(&f.codex_home(), &[]);
+    f.codex_job("triage", 2.0);
+    let child = f.run_job("triage");
+    wait_until("the job's thread", || f.codex_threads().len() == 1);
+    let thread = f.codex_threads()[0].clone();
+    wait_until("the run to record its thread", || {
+        f.runs()
+            .iter()
+            .any(|r| r["started"]["session_id"] == thread.as_str())
+    });
+    let rollout = harness_rollout(&f, &thread);
+    let complete = serde_json::json!({"timestamp": "2026-10-17T09:00:09.000Z", "type": "event_msg",
+        "payload": {"type": "task_complete", "turn_id": "t"}});
+    let mut text = fs::read_to_string(&rollout).unwrap();
+    text.push_str(&format!("{complete}\n"));
+    fs::write(&rollout, text).unwrap();
+    // The daemon reports the thread idle once its turn is over.
+    fs::write(f.codex_home().join("app-server-control/idle"), &thread).unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let runs = f.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0]["status"], "ok", "{runs:?}");
+    assert_eq!(runs[0]["started"]["harness"], "codex");
+    assert_eq!(runs[0]["started"]["session_id"], thread.as_str());
+    assert!(
+        crate::stop::methods(&calls).contains(&"thread/loaded/list".to_owned()),
+        "the thread was stopped through its daemon before it was forgotten"
+    );
+    let saved = fs::read_to_string(f.state().join("codex-threads.json")).unwrap_or_default();
+    assert!(!saved.contains(&thread), "{saved}");
+    assert!(rollout.exists(), "the conversation stays resumable");
+}
+
+/// A Codex run that outlives `timeout_min` ends as `timeout`, and its thread goes with it.
+#[test]
+fn a_codex_job_past_its_timeout_ends_its_thread() {
+    let f = Fixture::codex();
+    let calls = crate::stop::codex_daemon_in(&f.codex_home(), &[]);
+    // Six seconds, past which the worker removes the thread.
+    f.codex_job("slow", 0.1);
+    let out = f.run_job("slow").wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(124), "{}", stderr(&out));
+    let thread = f.codex_threads()[0].clone();
+    let runs = f.runs();
+    assert_eq!(runs[0]["status"], "timeout", "{runs:?}");
+    assert_eq!(runs[0]["terminal"]["reason"], "timeout", "{runs:?}");
+    assert!(crate::stop::methods(&calls).contains(&"thread/loaded/list".to_owned()));
+    let saved = fs::read_to_string(f.state().join("codex-threads.json")).unwrap_or_default();
+    assert!(!saved.contains(&thread), "{saved}");
+}
+
+fn harness_rollout(f: &Fixture, thread: &str) -> PathBuf {
+    let mut dirs = vec![f.codex_home().join("sessions")];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path
+                .to_string_lossy()
+                .ends_with(&format!("-{thread}.jsonl"))
+            {
+                return path;
+            }
+        }
+    }
+    panic!("no rollout for {thread}")
+}

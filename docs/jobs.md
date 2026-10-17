@@ -36,7 +36,7 @@ Unknown fields and versions above `4` are rejected. Older files migrate on read,
 
 A job's policy fields override `defaults` individually. The Default column below gives the built-in value used when neither sets one. `name`, `schedule`, `cwd`, `prompt` and `enabled` belong only to jobs. Composer settings belong in `defaults`; their exact keys are listed under [composer harnesses](#composer-harnesses). Unset values follow the harness's own configuration. The initial selection is the separate [`start.harness`](#start).
 
-Claude is the only harness cones can supervise, so it is the only one a job may name. A job on any other harness, whether the job says so or `defaults.harness` does, is refused when the file is read, and the message names the job. The refusal is deliberate: a schedule cones cannot carry is worse than no schedule. Every other harness remains yours to start from the composer.
+Claude and Codex are the harnesses cones can supervise, so they are the only ones a job may name. A Codex job also needs `codex_full_access: true`: Codex runs unattended only with `--dangerously-bypass-approvals-and-sandbox`, which lifts its sandbox too. A job on any other harness, whether the job says so or `defaults.harness` does, is refused when the file is read, and the message names the job. The refusal is deliberate: a schedule cones cannot carry is worse than no schedule. Every other harness remains yours to start from the composer.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ Claude is the only harness cones can supervise, so it is the only one a job may 
 | `aws_profile` | unset | Sets `AWS_PROFILE` over any imported shell value. Required with `bedrock: true`. |
 | `aws_region` | unset | Sets `AWS_REGION`; the chosen region must serve the model. Required with `bedrock: true`. |
 
-`codex_full_access: true` is rejected on a Claude job; `false` has no effect. The setting is still read from `defaults`, where nothing consumes it yet: no run and no composer launch passes it on today.
+`codex_full_access: true` is rejected on a Claude job and required on a Codex job, where it passes `--dangerously-bypass-approvals-and-sandbox`. A Codex job without it is refused when the file is read. The composer does not read it.
 
 ### Composer harnesses
 
@@ -252,7 +252,9 @@ The worker starts the session with `--bg` and resolves the returned short id to 
 
 While a run works, its session is a live agent like any other: the dashboard peeks it in a native viewer and enter joins the conversation to steer it. The run ends the session when it ends, so a scheduled job leaves no agent behind; the conversation stays resumable from the run row.
 
-On timeout, stop or replacement the worker removes the session with `claude rm`, and the whole worker process group receives SIGTERM, then SIGKILL after two seconds. A run reaped as an orphan removes its session too, because killing a supervisor never stops the agent the daemon holds.
+A Codex run's worker starts a remote client on the app-server daemon, as [`cones launch`](cli.md#starting-a-session) does, names the thread the daemon made, and lets the client go. It reads the thread's reported state every three seconds; an idle thread ends the run `ok`. The daemon runs the agent in its own environment, so the run's [environment](#environment) reaches only the client that submits the first turn.
+
+On timeout, stop or replacement the worker removes the session with `claude rm`, or for Codex with [`cones rm`](cli.md#removing-a-row): stopped through the daemon, then forgotten, and the whole worker process group receives SIGTERM, then SIGKILL after two seconds. A run reaped as an orphan removes its session too, because killing a supervisor never stops the agent the daemon holds.
 
 ### What the harness is told
 
@@ -273,7 +275,14 @@ blast radius you accept.
 | Effort override | `--effort <level>` when set |
 | Task | `-- <prompt>` |
 
-The harness assigns the session id. cones records that returned identity in the ledger; it passes no `--session-id` flag.
+| Guarantee | Codex arguments |
+| --- | --- |
+| Daemon thread, peekable while it runs | `--remote <daemon> -C <cwd>`, resolved when the run starts |
+| Unattended, no prompt to answer | `--dangerously-bypass-approvals-and-sandbox`, from `codex_full_access: true` |
+| Model override | `-m <m>` when set |
+| Task | `-- <prompt>` |
+
+Codex has no job name flag; the thread is titled by its prompt. The harness assigns the session id. cones records that returned identity in the ledger; it passes no `--session-id` flag.
 
 ### Environment
 

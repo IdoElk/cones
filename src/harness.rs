@@ -19,6 +19,12 @@ pub struct Invocation {
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
     pub timeout_s: f64,
+    /// The harness the worker starts. Absent in an invocation from before Codex jobs: Claude.
+    #[serde(default)]
+    pub harness: Option<HarnessKind>,
+    /// The run's state directory, which a daemon worker names its session through.
+    #[serde(default)]
+    pub state: Option<PathBuf>,
 }
 
 pub trait Harness {
@@ -44,6 +50,9 @@ pub fn adapter(kind: HarnessKind) -> Result<Box<dyn Harness>> {
     ) {
         (HarnessKind::Claude, spec::Support::Supported, spec::Support::Supported) => {
             Ok(Box::new(Claude))
+        }
+        (HarnessKind::Codex, spec::Support::Supported, spec::Support::Supported) => {
+            Ok(Box::new(Codex))
         }
         _ => bail!("{kind} has no execution adapter in v0.1. Use harness: claude"),
     }
@@ -1468,6 +1477,8 @@ impl Harness for Claude {
             env,
             cwd: job.cwd.clone(),
             timeout_s: job.timeout_min * 60.0,
+            harness: Some(HarnessKind::Claude),
+            state: None,
         })
     }
     fn resume(
@@ -1513,6 +1524,133 @@ impl Harness for Claude {
             .join(".claude");
         claude_transcript(&home, session_id, cwd)
     }
+}
+
+/// A Codex job is a thread in the app-server daemon, started by a remote client the way
+/// `cones launch` starts one. The client only submits the first turn; the daemon runs the
+/// agent, in its own environment, and the worker watches the state the daemon's rollout
+/// reports.
+pub struct Codex;
+
+impl Harness for Codex {
+    fn compile(&self, job: &ResolvedJob) -> Result<Invocation> {
+        ensure!(
+            job.harness == HarnessKind::Codex,
+            "Codex adapter requires a Codex job"
+        );
+        // Unattended means no approval prompt. Codex's one flag for that also lifts its
+        // sandbox, so the job has to ask for it rather than get it by default.
+        ensure!(
+            job.codex_full_access,
+            "job {}: a Codex job needs codex_full_access: true. Codex runs unattended only \
+             with --dangerously-bypass-approvals-and-sandbox, which also lifts its sandbox; \
+             without it the run would wait on approvals nobody answers",
+            job.name
+        );
+        let policy = Policy {
+            codex_model: job.model.clone(),
+            codex_skip_permissions: Some(true),
+            ..Policy::default()
+        };
+        let args = session_args(HarnessKind::Codex, None, &job.prompt, &policy)?
+            .into_iter()
+            .map(|a| {
+                a.into_string()
+                    .map_err(|_| anyhow::anyhow!("non-UTF-8 argument"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let env = environment(job)?;
+        let program = executable("codex", &env["PATH"])
+            .ok_or_else(|| anyhow::anyhow!("codex is missing from the launchd PATH"))?;
+        Ok(Invocation {
+            program,
+            args,
+            env,
+            cwd: job.cwd.clone(),
+            timeout_s: job.timeout_min * 60.0,
+            harness: Some(HarnessKind::Codex),
+            state: None,
+        })
+    }
+    fn resume(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+        policy: &Policy,
+    ) -> Result<std::process::Command> {
+        codex_resume(
+            &crate::codex::home(&crate::fleet::claude_dir()?),
+            session_id,
+            cwd,
+            skip_permissions(HarnessKind::Codex, policy),
+        )
+    }
+    fn attach(&self, session_id: &str, cwd: &Path) -> Result<std::process::Command> {
+        codex_client(
+            &crate::codex::home(&crate::fleet::claude_dir()?),
+            session_id,
+            cwd,
+            &spec(HarnessKind::Codex).commands.attach,
+            true,
+        )
+    }
+    fn transcript(&self, session_id: &str, _cwd: &Path) -> Result<PathBuf> {
+        codex_rollout(
+            &crate::codex::home(&crate::fleet::claude_dir()?),
+            session_id,
+        )
+    }
+}
+
+/// The rollout Codex writes for thread `id`, live or archived.
+pub fn codex_rollout(home: &Path, id: &str) -> Result<PathBuf> {
+    let suffix = format!("-{id}.jsonl");
+    // Rollouts sit under `sessions/YYYY/MM/DD` or directly in `archived_sessions`.
+    let mut dirs = vec![home.join("sessions"), home.join("archived_sessions")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.to_string_lossy().ends_with(&suffix) {
+                return Ok(path);
+            }
+        }
+    }
+    bail!("no Codex rollout for thread {id} in {}", home.display())
+}
+
+/// The remote client command a compiled Codex job starts: its compiled arguments behind the
+/// running daemon's address, which only a running daemon can give, so it is resolved here at
+/// run time and not at compile time.
+pub fn codex_job_command(invocation: &Invocation) -> Result<std::process::Command> {
+    let definition = spec(HarnessKind::Codex);
+    let launch = definition
+        .launch
+        .as_ref()
+        .context("codex has no launch operation")?;
+    ensure!(
+        launch.prefix.is_empty(),
+        "codex launch prefix is not supported"
+    );
+    let home = crate::codex::home(&crate::fleet::claude_dir()?);
+    let (path, remote) = codex_remote(&invocation.program, &home)?;
+    // A run has no screen to answer Codex's trust question on.
+    let _ = crate::codex::control::trust(&home, &invocation.cwd);
+    let mut command = std::process::Command::new(path);
+    command
+        .args(spec::args(
+            &launch.remote,
+            &[
+                ("remote", remote.as_ref()),
+                ("cwd", invocation.cwd.as_os_str()),
+            ],
+        )?)
+        .args(&invocation.args)
+        .envs(&invocation.env)
+        .current_dir(&invocation.cwd);
+    definition.home.set_command_home(&mut command, &home);
+    Ok(command)
 }
 
 /// Resume in the background so ctrl+z detaches without suspending the agent.
@@ -1628,6 +1766,12 @@ impl Outcome {
             self.input = state == "blocked";
             self.failed = !matches!(state, "done" | "blocked");
             self.reason = self.failed.then(|| format!("session_{state}"));
+            // A daemon worker reads its session's reported totals on the way out.
+            self.tokens_in = self.tokens_in.or(event["tokens_in"].as_u64());
+            self.tokens_out = self.tokens_out.or(event["tokens_out"].as_u64());
+            self.cost_usd = self.cost_usd.or(event["cost_usd"]
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0));
         }
         if event["type"] == "result" {
             // Claude ends a headless turn with a result and then answers again when a

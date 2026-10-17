@@ -37,7 +37,11 @@ fn invalid_definitions_fail_before_a_command_or_discovery_runs() {
             "/operations/sessions/default/lifetime",
             json!("terminal"),
         ),
-        (1, "/execution", json!({"enforcement":"supported"})),
+        (
+            2,
+            "/execution",
+            json!({"enforcement":"supported","result":"supported"}),
+        ),
         (1, "/discovery/daemon", json!(null)),
         (1, "/discovery/daemon/pid", json!("/app-server.pid")),
         (0, "/discovery/daemon", json!({"pid":"a.pid", "locks":"b"})),

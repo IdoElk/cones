@@ -185,8 +185,10 @@ remain owner decisions; the skill and repository instructions govern the workflo
 
 Jobs are the scheduling client. Saving a job installs its launchd schedule. A tick invokes `cones run`; `cones catchup`
 handles eligible missed schedules at login. The supervisor admits the run under the job's
-overlap policy and starts a worker in a separate process group. The worker launches the
-native background session and observes its reported result.
+overlap policy and starts a worker in a separate process group. The worker starts the
+session through the control plane's start, a Claude background session or a Codex daemon
+thread, and observes its reported result. A Codex run is watched through the same session
+read as `cones wait` and ended with the same `rm`.
 
 The ledger retains the run's identity, policy, outcome and usage, with captured output
 stored separately. Timeout, stop and replacement end the native session and worker group.

@@ -1408,7 +1408,7 @@ impl HarnessSpec {
             "native handler does not implement this harness"
         );
         ensure!(
-            self.kind == HarnessKind::Claude
+            matches!(self.kind, HarnessKind::Claude | HarnessKind::Codex)
                 || (self.execution.enforcement != Support::Supported
                     && self.execution.result != Support::Supported),
             "supervised support requires a native execution adapter"

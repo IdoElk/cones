@@ -445,7 +445,7 @@ fn codex_thread(f: &Fixture, id: &str) -> PathBuf {
     rollout
 }
 
-type Calls = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+pub(crate) type Calls = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
 
 /// A stand-in app-server on the fixture's control socket, holding `loaded` with a turn in
 /// progress and one background terminal open. It answers the way Codex 0.162.1 was seen to:
@@ -456,7 +456,7 @@ fn codex_daemon(f: &Fixture, loaded: &[&str]) -> Calls {
 }
 
 /// `codex_daemon` on the control socket of the Codex home `home`.
-fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
+pub(crate) fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
     use tungstenite::Message;
     let dir = home.join("app-server-control");
     fs::create_dir_all(&dir).unwrap();
@@ -464,6 +464,7 @@ fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
         std::os::unix::net::UnixListener::bind(dir.join("app-server-control.sock")).unwrap();
     let seen = Calls::default();
     let (calls, loaded) = (seen.clone(), json!(loaded));
+    let idle = dir.join("idle");
     std::thread::spawn(move || {
         // Polls left before each acknowledged request is reported done; None is still running.
         let (mut turn, mut terminal) = (None::<u8>, None::<u8>);
@@ -476,7 +477,14 @@ fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
                     "initialized" => continue,
                     "initialize" => json!({}),
                     "thread/read" => {
-                        let status = if turn == Some(0) { "idle" } else { "active" };
+                        // A test settles a thread by naming it in `idle` beside the socket.
+                        let settled = fs::read_to_string(idle.as_path()).unwrap_or_default();
+                        let id = request["params"]["threadId"].as_str().unwrap_or_default();
+                        let status = if turn == Some(0) || settled.lines().any(|l| l == id) {
+                            "idle"
+                        } else {
+                            "active"
+                        };
                         json!({"thread": {"id": request["params"]["threadId"],
                             "status": {"type": status, "activeFlags": []}}})
                     }
@@ -505,6 +513,9 @@ fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
                         json!({})
                     }
                     "thread/name/set" => json!({}),
+                    // A launch trusts its folder before the client starts.
+                    "config/read" => json!({"config": {}}),
+                    "config/batchWrite" => json!({}),
                     other => panic!("cones sent the daemon {other}"),
                 };
                 let reply = json!({"id": request["id"], "result": result}).to_string();
@@ -605,7 +616,7 @@ fn a_codex_thread_in_a_home_its_live_client_names_is_stopped_through_that_home()
 }
 
 /// What the daemon was asked beyond the handshake and the status read every listing makes.
-fn methods(calls: &Calls) -> Vec<String> {
+pub(crate) fn methods(calls: &Calls) -> Vec<String> {
     calls
         .lock()
         .unwrap()

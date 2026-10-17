@@ -121,9 +121,8 @@ fn reap_run(ledger: &Ledger, run: &Run, replaced: bool) -> Result<bool> {
     if run.started.attach_mode.as_deref() == Some("session")
         && let Some(session_id) = run.started.session_id.as_deref()
         && let Ok(home) = crate::fleet::claude_dir()
-        && crate::fleet::control_session(&home, session_id)?.is_some()
     {
-        crate::fleet::stop(&home, session_id)?;
+        end_session(ledger, &home, run_harness(&run.started), session_id)?;
     }
     let mut terminal = Record::new(
         run.started.run_id.clone(),
@@ -159,7 +158,7 @@ pub fn reap_orphans(ledger: &Ledger) -> Result<()> {
         }
         if let Some(session_id) = run.started.session_id.as_deref()
             && let Ok(home) = crate::fleet::claude_dir()
-            && crate::fleet::control_session(&home, session_id)?.is_some()
+            && live_session(ledger, &home, run_harness(&run.started), session_id)?.is_some()
         {
             continue;
         }
@@ -168,6 +167,43 @@ pub fn reap_orphans(ledger: &Ledger) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_harness(run: &Record) -> crate::config::HarnessKind {
+    run.harness.unwrap_or(crate::config::HarnessKind::Claude)
+}
+
+/// The live session a run started, read from the harness that holds it.
+fn live_session(
+    ledger: &Ledger,
+    claude: &Path,
+    kind: crate::config::HarnessKind,
+    id: &str,
+) -> Result<Option<crate::fleet::Session>> {
+    match kind {
+        // A removed thread is hidden while its daemon still holds it for a few minutes.
+        crate::config::HarnessKind::Codex if ledger.hidden()?.contains(id) => Ok(None),
+        crate::config::HarnessKind::Codex => Ok(crate::codex::thread(claude, &ledger.state, id)),
+        _ => crate::fleet::control_session(claude, id),
+    }
+}
+
+/// End a run's session, false when it is already gone: `claude rm` for a Claude run, as
+/// before, and `cones rm` for a daemon thread, which stops it and then forgets it.
+fn end_session(
+    ledger: &Ledger,
+    claude: &Path,
+    kind: crate::config::HarnessKind,
+    id: &str,
+) -> Result<bool> {
+    match live_session(ledger, claude, kind, id)? {
+        None => Ok(false),
+        Some(session) if kind == crate::config::HarnessKind::Codex => {
+            crate::stop::remove_session(&ledger.state, claude, &session)?;
+            Ok(true)
+        }
+        Some(_) => crate::fleet::stop(claude, id),
+    }
 }
 
 /// `CONES_NOTIFIER` overrides osascript and receives (title, message).
@@ -423,7 +459,8 @@ pub fn run(job: &ResolvedJob, ledger: &Ledger, executable: &Path, trigger: &str)
     initial.attach_mode = Some("session".into());
     let prepared = (|| -> Result<_> {
         let harness = harness::adapter(job.harness)?;
-        let invocation = harness.compile(job)?;
+        let mut invocation = harness.compile(job)?;
+        invocation.state = Some(ledger.state.clone());
         Ok((harness, invocation))
     })();
     let (harness, invocation) = match prepared {
@@ -600,12 +637,10 @@ pub fn run(job: &ResolvedJob, ledger: &Ledger, executable: &Path, trigger: &str)
     // A run that ends without its supervisor's account removes the session here, and says
     // so rather than leaving an agent nothing is watching.
     let background = invocation.args.iter().any(|a| a == "--bg");
-    if background && !outcome.result_seen {
-        let remove =
-            |home: std::path::PathBuf| match crate::fleet::control_session(&home, &session_id)? {
-                Some(_) => crate::fleet::stop(&home, &session_id).map(|_| ()),
-                None => Ok(()),
-            };
+    if (background || job.harness != crate::config::HarnessKind::Claude) && !outcome.result_seen {
+        let remove = |home: std::path::PathBuf| {
+            end_session(ledger, &home, job.harness, &session_id).map(|_| ())
+        };
         if let Err(e) = crate::fleet::claude_dir().and_then(remove) {
             terminal.reason = Some(match terminal.reason.take() {
                 Some(had) => format!("{had}; session not removed: {e:#}"),
@@ -673,10 +708,8 @@ pub fn stop(ledger: &Ledger, claude: &Path, id: &str) -> Result<bool> {
         // A finished run can leave the client it claimed alive and listed: Claude hands a
         // headless run a background spare that outlives the run. Remove that session rather
         // than report a row nothing can clear. An id the harness no longer lists is gone.
-        return match crate::fleet::control_session(claude, id)? {
-            Some(_) => crate::fleet::stop(claude, id),
-            None => Ok(false),
-        };
+        let session = run.started.session_id.as_deref().unwrap_or(id);
+        return end_session(ledger, claude, run_harness(&run.started), session);
     }
     signal_run(&run.started, SIGTERM)?;
     Ok(true)
@@ -873,6 +906,114 @@ fn background_worker(invocation: &Invocation, cancelled: &AtomicBool, parent: i3
     }
 }
 
+/// Run a job as a daemon thread, started and watched through the control plane: the start
+/// `cones launch` uses, the session read the verbs use, and `cones rm` to end it. The daemon
+/// runs the agent, so the run's environment reaches only the client that submits the first
+/// turn. The run ends when the thread settles; Codex reports no separate request for input,
+/// so a thread that ends its turn on a question settles like any other.
+fn daemon_worker(invocation: &Invocation, cancelled: &AtomicBool, parent: i32) -> Result<i32> {
+    let kind = crate::config::HarnessKind::Codex;
+    let state = invocation
+        .state
+        .clone()
+        .context("run has no state directory")?;
+    let claude = crate::fleet::claude_dir()?;
+    let prompt = invocation.args.last().context("run has no prompt")?;
+    // A thread's cost is priced from the state directory's catalog, as `cones ls` prices it.
+    crate::cost::init(&state, false);
+    // Only Codex is scanned: a run watches one harness and owes the others nothing.
+    let policy = crate::config::Policy {
+        claude_enabled: Some(false),
+        pi_enabled: Some(false),
+        opencode_enabled: Some(false),
+        gemini_enabled: Some(false),
+        cursor_enabled: Some(false),
+        copilot_enabled: Some(false),
+        amp_enabled: Some(false),
+        droid_enabled: Some(false),
+        kimi_enabled: Some(false),
+        ..crate::config::Policy::default()
+    };
+    let command = harness::codex_job_command(invocation)?;
+    let launched = crate::launch::detached(
+        &state,
+        &claude,
+        kind,
+        &invocation.cwd,
+        prompt,
+        true,
+        &policy,
+        harness::Start::Foreground(command),
+    )?;
+    let session_id = launched.id;
+    report(&json!({"type": "cones_launch", "session_id": session_id}))?;
+    let find = || -> Result<Option<crate::fleet::Session>> {
+        Ok(crate::tui::sessions(&claude, &state, &policy)?
+            .into_iter()
+            .find(|s| s.session_id == session_id))
+    };
+    // The session ends with the run, as a Claude run's does; its rollout stays resumable.
+    let end = |session: Option<&crate::fleet::Session>| -> Result<()> {
+        match session {
+            Some(session) => crate::stop::remove_session(&state, &claude, session).map(|_| ()),
+            None => Ok(()),
+        }
+    };
+    let (_, watch) = watch_timing();
+    let start = Instant::now();
+    let mut checked = Instant::now() - watch;
+    let mut last = None;
+    loop {
+        if checked.elapsed() >= watch {
+            checked = Instant::now();
+            let session = match find() {
+                Ok(session) => session,
+                Err(_) if cancelled.load(Ordering::Relaxed) => last.clone(),
+                Err(e) => return Err(e),
+            };
+            match session.as_ref().map(|s| s.state.as_str()) {
+                _ if cancelled.load(Ordering::Relaxed) => {}
+                Some(state @ ("idle" | "done" | "failed" | "stopped")) => {
+                    let state = if state == "idle" { "done" } else { state }.to_owned();
+                    let row = session.as_ref().expect("matched a row");
+                    let removed = end(Some(row));
+                    report(&json!({
+                        "type": "cones_result", "state": state,
+                        "cost_usd": row.cost_usd, "tokens_in": row.tokens_in,
+                        "tokens_out": row.tokens_out,
+                        "removed": removed.is_ok(),
+                        "error": removed.err().map(|e| format!("{e:#}")),
+                    }))?;
+                    return Ok(0);
+                }
+                // The thread was named a moment ago, so its absence is a removal.
+                None => {
+                    report(&json!({"type": "cones_result", "state": "stopped"}))?;
+                    return Ok(0);
+                }
+                _ => last = session,
+            }
+        }
+        if cancelled.load(Ordering::Relaxed)
+            || unsafe { libc::getppid() } != parent
+            || start.elapsed().as_secs_f64() > invocation.timeout_s + 1.0
+        {
+            let row = find().ok().flatten().or(last);
+            let stopped = end(row.as_ref());
+            report(&json!({
+                "type": "cones_result", "state": "stopped",
+                "cost_usd": row.as_ref().and_then(|r| r.cost_usd),
+                "tokens_in": row.as_ref().and_then(|r| r.tokens_in),
+                "tokens_out": row.as_ref().and_then(|r| r.tokens_out),
+                "removed": stopped.is_ok(),
+                "error": stopped.err().map(|e| format!("{e:#}")),
+            }))?;
+            return Ok(124);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn report(event: &serde_json::Value) -> Result<()> {
     let mut out = std::io::stdout();
     writeln!(out, "{event}")?;
@@ -906,6 +1047,9 @@ pub fn worker(run_id: &str) -> Result<i32> {
     signal_hook::flag::register(SIGTERM, Arc::clone(&cancelled))?;
     signal_hook::flag::register(SIGINT, Arc::clone(&cancelled))?;
     let parent = unsafe { libc::getppid() };
+    if invocation.harness == Some(crate::config::HarnessKind::Codex) {
+        return daemon_worker(&invocation, &cancelled, parent);
+    }
     if invocation.args.iter().any(|a| a == "--bg") {
         return background_worker(&invocation, &cancelled, parent);
     }
