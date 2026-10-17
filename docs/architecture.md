@@ -1,8 +1,12 @@
 # Architecture
 
-cones is one binary: a dashboard over native agent sessions, a job supervisor and a run ledger.
-[Dashboard](dashboard.md), [configuration](jobs.md), [harness support](harness.md) and
-[harness definitions](harness-definitions.md) describe each area's behavior.
+cones is one binary in two layers. The control plane puts every coding-agent session on the
+Mac in one place: it finds sessions from native records, reads their conversations, and
+starts, messages, renames and stops them, for a person or an agent alike. Three clients sit
+on it, each adding one opinion: the [dashboard](dashboard.md), the
+[coordinator](#the-coordinator) and [scheduled jobs](jobs.md).
+[Harness support](harness.md) and [harness definitions](harness-definitions.md) describe what
+each harness allows.
 
 ## The boundary
 
@@ -15,6 +19,23 @@ cones is one binary: a dashboard over native agent sessions, a job supervisor an
 cones never intercepts tool calls or adds a permission engine. A policy guarantee the
 harness cannot enforce is a validation error. State, context and usage come from native
 reports; missing values stay absent. Cost estimates carry their source and coverage.
+
+## The control plane
+
+Every verb below is a `cones` command, open to any agent with a shell.
+
+| Verb | Command | Notes |
+| --- | --- | --- |
+| Find | `ls` | Live sessions and runs, by folder |
+| Read | `show`, `search`, `mcp` | Starts nothing |
+| Launch | `launch` | Detached; prints the id |
+| Message | `comms send` | Through the harness's `message` |
+| Rename | `rename` | The harness's own rename |
+| Stop | `stop` | Keeps the conversation |
+| Remove | `rm` | Also closes jobs and folders |
+
+Resume and fork are dashboard actions today; they have no command yet. The
+[command reference](cli.md) has each verb's flags and output.
 
 ## Components
 
@@ -50,18 +71,6 @@ flowchart TB
     class HARNESS,LAUNCHD foreign
 ```
 
-## Runs and the ledger
-
-Saving a job installs its launchd schedule. A tick invokes `cones run`; `cones catchup`
-handles eligible missed schedules at login. The supervisor admits the run under the job's
-overlap policy and starts a worker in a separate process group. The worker launches the
-native background session and observes its reported result.
-
-The ledger retains the run's identity, policy, outcome and usage, with captured output
-stored separately. Timeout, stop and replacement end the native session and worker group.
-Resuming a conversation keeps the original ledger outcome; its live session remains
-associated with the run row. See the [run lifecycle](jobs.md#run-lifecycle).
-
 ## Harness definitions
 
 Embedded `assets/harnesses/*.yaml` files declare paths, reports, native arguments and viewer
@@ -92,7 +101,8 @@ cover refresh and lifecycle costs.
 
 ## The dashboard
 
-`tui.rs` owns the shared application state and screens. `viewer.rs` renders native clients
+The dashboard is the client people use: a terminal workspace with rows, native viewers and a
+composer. `tui.rs` owns the shared application state and screens. `viewer.rs` renders native clients
 from private PTYs through the terminal emulator. `terminal_host.rs` retains owned interactive
 terminals across dashboard closure; attachable daemon sessions keep their native ownership.
 See [viewer controls](dashboard.md#viewer) and [ownership limits](harness.md#native-actions).
@@ -108,7 +118,7 @@ inference on a separate worker, outside drawing and the test suite.
 
 ## The coordinator
 
-The optional [coordinator skill](../assets/coordinator/skills/start-coordinator/SKILL.md)
+The coordinator is the client agents use to share a folder. The optional [coordinator skill](../assets/coordinator/skills/start-coordinator/SKILL.md)
 handles overlaps, relevant findings and integration in one folder. The launcher embeds the
 skill as a plugin and starts a background Claude session. The role and its command plumbing
 are harness-neutral; task scope remains with the owner and workers.
@@ -166,3 +176,15 @@ Workers hand over checked commits. The coordinator integrates them in order, che
 combined tree and advances the base only if it has not changed. Shared-tree changes must be
 staged from a diff containing only the intended hunks. Scope, configuration and publication
 remain owner decisions; the skill and repository instructions govern the workflow.
+
+## Jobs
+
+Jobs are the scheduling client. Saving a job installs its launchd schedule. A tick invokes `cones run`; `cones catchup`
+handles eligible missed schedules at login. The supervisor admits the run under the job's
+overlap policy and starts a worker in a separate process group. The worker launches the
+native background session and observes its reported result.
+
+The ledger retains the run's identity, policy, outcome and usage, with captured output
+stored separately. Timeout, stop and replacement end the native session and worker group.
+Resuming a conversation keeps the original ledger outcome; its live session remains
+associated with the run row. See the [run lifecycle](jobs.md#run-lifecycle).

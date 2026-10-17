@@ -2,7 +2,7 @@
   <img src="assets/cones.svg" alt="cones: A terminal workspace for coding agents." width="720">
 </p>
 
-**A terminal workspace for coding agents.** Browse sessions and history, peek into running work, and start agents across projects. Claude Code, Codex, pi and OpenCode keep their native terminal interfaces.
+**A terminal workspace for coding agents.** Browse sessions and history, peek into running work, and start agents across projects. Claude Code, Codex, pi and OpenCode keep their native terminal interfaces. Your agents get the same reach through the `cones` command and its [skill](assets/coordinator/skills/cones/SKILL.md): list, read, start, message and stop sessions in any folder.
 
 <p align="center"><a href="assets/tui.gif"><img src="assets/tui.gif" alt="Browse eight sessions, open a live terminal, type a follow-up, then add a folder and launch a new agent" width="100%"></a><br><sub>Recorded with native CLIs in sample projects. <a href="assets/tui.svg">Still image</a>.</sub></p>
 

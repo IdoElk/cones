@@ -5,9 +5,10 @@ description: "What cones can do for an agent: see every coding-agent session on 
 
 # cones
 
-cones is the terminal workspace the owner runs their coding agents in: Claude Code, Codex, pi,
-OpenCode and a few terminal-only launchers. It knows every session on this Mac from the
-harnesses' own records, so you can use it to reach beyond your own session.
+cones is the control plane for every coding-agent session on this Mac: Claude Code, Codex, pi,
+OpenCode and a few terminal-only launchers. It knows each session from the harnesses' own
+records, and its commands find, read, start, message and stop them. The owner's dashboard is
+built on the same commands, so you can reach as far as the owner does.
 
 ## What cones does for you
 

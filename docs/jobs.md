@@ -2,7 +2,7 @@
 
 [README](../README.md) · [Dashboard controls](dashboard.md) · [Commands](cli.md) · [Harness support](harness.md)
 
-`jobs.yaml` configures the dashboard and supervised jobs. This guide follows the file's fields, then how schedules fire and what a run records. The dashboard's [config editor](dashboard.md#config) and [job wizard](dashboard.md#jobs) edit the same file.
+`jobs.yaml` configures the dashboard and supervised jobs, the client that starts sessions on a schedule ([architecture](architecture.md#jobs)). This guide follows the file's fields, then how schedules fire and what a run records. The dashboard's [config editor](dashboard.md#config) and [job wizard](dashboard.md#jobs) edit the same file.
 
 ## File structure
 
