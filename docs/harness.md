@@ -7,6 +7,29 @@ Missing state, context and usage stay absent. It installs no global session hook
 pi and OpenCode clients load native reporting extensions. Four harnesses have report readers;
 six more have [experimental terminal adapters](#additional-terminal-harnesses).
 
+## Capabilities
+
+What each [control plane](architecture.md#the-control-plane) verb reaches. "Owned" means a
+client in a terminal cones hosts. "Others" are Gemini, Cursor Agent, Copilot, Amp, Droid and
+Kimi. The [command reference](cli.md#commands) has each verb's rules.
+
+| Verb | Claude Code | Codex | pi | OpenCode | Others |
+| --- | --- | --- | --- | --- | --- |
+| `ls` | ✓ | ✓ | ✓ | ✓ | Process only |
+| `show`, `search` | ✓ | ✓ | ✓ | ✓ | Copilot, Cursor; owned screens |
+| `launch` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `resume` | ✓ | ✓ | ✓ | ✓ | – |
+| `fork` | ✓ | Dashboard only | ✓ | ✓ | – |
+| `send` | ✓ | Daemon | Owned | Owned | – |
+| `wait` | ✓ | ✓ | ✓ | Owned | – |
+| `rename` | ✓ | ✓ | Owned | Owned | – |
+| `stop` | Background | Daemon | Owned | Owned | Owned |
+| `rm` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Join from the dashboard | Background | Daemon | Owned | Owned | Owned |
+
+`wait` needs a reported state, so a session with none never settles. `rm` removes from the
+harness's own list where it keeps one and otherwise stops the verified process.
+
 ## Discovery
 
 | Harness | Native home | Live source |

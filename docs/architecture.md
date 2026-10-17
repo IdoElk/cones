@@ -37,7 +37,7 @@ Every verb below is a `cones` command, open to any agent with a shell.
 | Remove | `rm` | Also closes jobs and folders |
 
 `cones mcp` serves every verb as an MCP tool of the same name, for an agent without a shell.
-The verbs read every live session, a job's included. `ls` and the dashboard show a job's
+Which verbs reach which harness is the [capability matrix](harness.md#capabilities). The verbs read every live session, a job's included. `ls` and the dashboard show a job's
 session as its run row instead. The dashboard and the commands build the same native commands. The dashboard opens resumes
 and forks in its own pane; the commands host them detached. The
 [command reference](cli.md) has each verb's flags and output.
