@@ -781,27 +781,14 @@ fn background_worker(invocation: &Invocation, cancelled: &AtomicBool, parent: i3
         .get("CLAUDE_CONFIG_DIR")
         .map(std::path::PathBuf::from)
         .map_or_else(crate::fleet::claude_dir, Ok)?;
-    let out = Command::new(&invocation.program)
+    // The start `cones launch` and the dashboard use, under the run's cleared environment.
+    let mut command = Command::new(&invocation.program);
+    command
         .args(&invocation.args)
         .env_clear()
         .envs(&invocation.env)
-        .current_dir(&invocation.cwd)
-        .stdin(Stdio::null())
-        .output()
-        .context("spawn harness")?;
-    let (stdout, stderr) = (
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    ensure!(
-        out.status.success(),
-        "claude --bg exited {}: {}",
-        out.status.code().unwrap_or(-1),
-        stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("no error output")
-    );
+        .current_dir(&invocation.cwd);
+    let stdout = crate::launch::start_background(crate::config::HarnessKind::Claude, &mut command)?;
     // `--bg` names the conversation and prints the short form of that name. The run is
     // recorded under the id the roster carries for it, never under one cones invented.
     let short = crate::launch::background_id(&stdout)
