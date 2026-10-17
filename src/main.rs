@@ -177,6 +177,18 @@ enum Action {
         #[arg(long)]
         json: bool,
     },
+    /// Reopen a conversation from history, detached, as the dashboard's Enter on a history row
+    /// does. Prints its id; `cones send` gives it work.
+    Resume {
+        /// The conversation's id as `cones search` or `cones ls` prints it, or a prefix of one.
+        id: String,
+    },
+    /// Fork a conversation through its harness's native fork, detached, as the dashboard's
+    /// fork does. Prints the fork's id; `cones send` gives it work.
+    Fork {
+        /// The conversation's id as `cones search` or `cones ls` prints it, or a prefix of one.
+        id: String,
+    },
     /// End a session's work and keep its conversation; see docs/cli.md.
     Stop {
         /// The session id as `cones ls` prints it, or an unambiguous prefix of one.
@@ -808,6 +820,28 @@ fn execute(cli: Cli) -> Result<i32> {
                     );
                 }
             }
+            Ok(0)
+        }
+        Action::Resume { id } => {
+            let entry = cones::show::entry(&claude, &id)?;
+            let policy = config::defaults(&jobs_path);
+            let rows =
+                cones::tui::fleet_rows(&claude, &state, &Ledger::new(&state)?.runs()?, &policy)?;
+            let started = cones::launch::resume(&state, &policy, &entry, &rows)?;
+            eprintln!("{} running detached", started.harness);
+            println!("{}", started.id);
+            Ok(0)
+        }
+        Action::Fork { id } => {
+            let entry = cones::show::entry(&claude, &id)?;
+            let policy = config::defaults(&jobs_path);
+            let started = cones::launch::fork(&state, &claude, &policy, &entry)?;
+            eprintln!(
+                "{} fork running detached, {}",
+                started.harness,
+                started.identity.describe()
+            );
+            println!("{}", started.id);
             Ok(0)
         }
         Action::Stop { id } => {

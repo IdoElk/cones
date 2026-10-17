@@ -8858,7 +8858,7 @@ fn history_key(key: &history::Key) -> String {
 }
 
 /// Reuse column formatting without putting history into the live fleet or its counters.
-fn history_session(entry: &history::Entry) -> Session {
+pub(crate) fn history_session(entry: &history::Entry) -> Session {
     let c = entry.columns.clone().unwrap_or_default();
     Session {
         session_id: entry.key.session_id.clone(),

@@ -14,6 +14,7 @@ Installed under a fixture HOME as `.local/bin/claude`, `.local/bin/pi`, `.local/
   trust    codex only: ask to trust the folder, and wait, until `trusted` in the home names it
   login    pi only: ask a sign-in question, then exit shortly after
   stuck    pi only: ask the same question and wait on it
+  nofork   pi only: a --help that names no native fork
 """
 import json
 import os
@@ -62,6 +63,8 @@ if name in ("pi", "kimi", "copilot"):
         sys.exit(0)
     if "--help" in args:
         print("--model  choose a model\n--interactive, --prompt  start with an instruction")
+        if mode != "nofork":
+            print("--fork, --session-id  fork a session under a new id")
         sys.exit(0)
     if mode == "fail":
         print("fixture refused this launch", file=sys.stderr)

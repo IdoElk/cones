@@ -1139,3 +1139,100 @@ fn a_waited_launch_returns_when_the_worker_s_turn_ends_and_not_before() {
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert!(stdout(&out).ends_with("\ntimeout"), "{}", stdout(&out));
 }
+
+/// A pi conversation in the fixture's history, as pi writes it.
+fn pi_history(f: &Fixture, id: &str) -> PathBuf {
+    let dir = f.path().join("pi/sessions/--work--");
+    fs::create_dir_all(&dir).unwrap();
+    let transcript = dir.join(format!("2026-10-17_{id}.jsonl"));
+    let lines = [
+        serde_json::json!({"type":"session","id":id,"cwd":f.work,"timestamp":"2026-10-17T09:00:00Z"}),
+        serde_json::json!({"type":"message","timestamp":"2026-10-17T09:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Sort the imports"}]}}),
+        serde_json::json!({"type":"message","timestamp":"2026-10-17T09:00:02Z","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Sorted"}]}}),
+    ];
+    fs::write(
+        &transcript,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    transcript.canonicalize().unwrap()
+}
+
+fn args_of(pid: u32) -> String {
+    let out = Command::new("/bin/ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+#[test]
+fn resume_and_fork_reopen_a_conversation_detached_and_record_the_fork_s_parent() {
+    let f = Fixture::offering("pi");
+    let id = "0199f2a4-7c1e-7000-8000-00000000a11d";
+    let transcript = pi_history(&f, id);
+
+    // Resume reopens the conversation in a cones terminal and prints its own id.
+    let out = f.cones("ok", &["resume", &id[..8]]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), id);
+    let hosted = f.hosted_pids();
+    assert_eq!(hosted.len(), 1, "{hosted:?}");
+    assert!(
+        alive(hosted[0]),
+        "the resumed client died with its launcher"
+    );
+    assert!(
+        args_of(hosted[0]).ends_with(&format!("--session {}", transcript.display())),
+        "{}",
+        args_of(hosted[0])
+    );
+    let recovery = f.recovery();
+    assert_eq!(recovery[0]["event"], "resume.submitted");
+    assert_eq!(recovery[0]["data"]["operation_id"], id);
+
+    // A second resume of a running conversation is refused, as the dashboard refuses it.
+    let out = f.cones("ok", &["resume", id]);
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(stderr(&out).contains("already running"), "{}", stderr(&out));
+    assert_eq!(f.hosted_pids().len(), 1);
+
+    // Fork starts a new pi session under a new id and records the parent.
+    let out = f.cones("ok", &["fork", id]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let forked = f
+        .hosted_pids()
+        .into_iter()
+        .find(|&p| p != hosted[0])
+        .expect("the fork has a host of its own");
+    let args = args_of(forked);
+    assert!(
+        args.contains(&format!("--fork {}", transcript.display())),
+        "{args}"
+    );
+    let child = args.rsplit(' ').next().unwrap().to_owned();
+    assert!(uuid::Uuid::parse_str(&child).is_ok(), "{args}");
+    assert_ne!(child, id);
+    let links: Value =
+        serde_json::from_slice(&fs::read(f.state().join("forks.json")).unwrap()).unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1, "{links}");
+    assert_eq!(links[0]["parent"], id);
+    assert_eq!(links[0]["child"], child.as_str());
+    assert_eq!(links[0]["harness"], "pi");
+}
+
+#[test]
+fn a_fork_of_a_harness_with_no_native_fork_is_refused_before_anything_starts() {
+    let f = Fixture::offering("pi");
+    let id = "0199f2a4-7c1e-7000-8000-00000000b0b0";
+    pi_history(&f, id);
+    // The fixture's pi --help names no --fork, so the fork operation's probe refuses it.
+    let out = f.cones("nofork", &["fork", id]);
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("does not support native forks"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(f.hosted_pids().is_empty());
+}

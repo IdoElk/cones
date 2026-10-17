@@ -27,6 +27,7 @@ Install and authenticate each CLI separately. cones searches `~/.local/bin`, `~/
 | `cones run JOB [--trigger manual\|schedule]` | Run a configured job. Trigger defaults to `manual`; launchd passes `schedule`. |
 | `cones run --prompt "..." [JOB]` | Run a [one-off task](#one-off-tasks). |
 | `cones launch --dir PATH [PROMPT] [--harness NAME] [--model ID] [--effort E] [--name NAME] [--print-command] [--no-prompt-record] [--wait [--timeout S]]` | [Start a session](#starting-a-session) the way the dashboard's composer does. The session runs detached, needs no terminal, and its identifier is printed. |
+| `cones resume ID`, `cones fork ID` | [Reopen or fork a conversation](#resuming-and-forking) from history, detached, and print its id. |
 | `cones catchup [--dry-run]` | Recover [missed schedules](jobs.md#sleep-login-and-reboot). `--dry-run` prints `name missed <local time>` for each candidate and starts nothing. |
 | `cones ls [--dir PATH] [--job NAME] [--status S] [--json]` | [Read runs and live sessions](#reading-runs-and-sessions). |
 | `cones search QUERY [--dir PATH] [--harness NAME] [--json]` | [Search conversation history](#searching-conversations), including archived sessions. |
@@ -248,6 +249,26 @@ The task uses the current directory and the named job's policy, otherwise the fi
 Without a valid readable file or template job, it uses [built-in defaults](jobs.md#job-fields-and-defaults).
 An unknown explicit job is an error. Each task gets an `adhoc-<8 hex>` name and independent
 overlap admission.
+
+### Resuming and forking
+
+```sh
+cones resume 5bf8392e
+cones fork 5bf8392e
+```
+
+Both take an id from `cones search` or `cones ls`, or an unambiguous prefix, and run the
+command the dashboard runs for that row in a persistent cones terminal, so a dashboard can
+open it later. Neither takes a prompt; `cones comms send` gives the session work.
+
+- **Resume** prints the conversation's own id. A conversation that is already running, in
+  the roster, a cones terminal or a live run, is refused. A row hidden by `cones rm` comes
+  back. Resume fails if the client exits within its first seconds.
+- **Fork** runs the harness's native fork and prints the fork's id, a
+  [kind](#starting-a-session) as `launch` reports it. Once the fork has a native id, its
+  parent is recorded and the dashboard lists it under that parent. A harness with no verified
+  native fork is refused. Codex forks are named only in the dashboard, so `cones fork`
+  refuses them.
 
 ### Stopping a session
 

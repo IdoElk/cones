@@ -47,12 +47,41 @@ pub fn locate_scoped(
     locate_entries(&history::all(&history::sources(claude))?, id, harness, home)
 }
 
+/// The history entry `id` names, by exact id or by an unambiguous prefix of one, for the
+/// commands that act on a conversation rather than print it.
+pub fn entry(claude: &Path, id: &str) -> Result<history::Entry> {
+    crate::observe::reset();
+    crate::fleet::detect_all_homes(claude);
+    find_entry(&history::all(&history::sources(claude))?, id, None, None).cloned()
+}
+
 pub(crate) fn locate_entries(
     entries: &[history::Entry],
     id: &str,
     harness: Option<&str>,
     home: Option<&Path>,
 ) -> Result<Located> {
+    let entry = find_entry(entries, id, harness, home)?;
+    Ok(Located {
+        source: if entry.key.harness == "opencode" {
+            transcript::Source::Opencode {
+                database: entry.transcript.clone(),
+                session_id: entry.key.session_id.clone(),
+            }
+        } else {
+            transcript::Source::Conversation(entry.transcript.clone())
+        },
+        key: entry.key.clone(),
+        cwd: entry.cwd.clone(),
+    })
+}
+
+fn find_entry<'a>(
+    entries: &'a [history::Entry],
+    id: &str,
+    harness: Option<&str>,
+    home: Option<&Path>,
+) -> Result<&'a history::Entry> {
     let id = id.trim();
     ensure!(!id.is_empty(), "a session id is required");
     let home = home.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_owned()));
@@ -93,19 +122,7 @@ pub(crate) fn locate_entries(
             ))
             .collect::<String>()
     );
-    let entry = found[0];
-    Ok(Located {
-        source: if entry.key.harness == "opencode" {
-            transcript::Source::Opencode {
-                database: entry.transcript.clone(),
-                session_id: entry.key.session_id.clone(),
-            }
-        } else {
-            transcript::Source::Conversation(entry.transcript.clone())
-        },
-        key: entry.key.clone(),
-        cwd: entry.cwd.clone(),
-    })
+    Ok(found[0])
 }
 
 /// Machine-readable export with the same messages and omissions as the text command.

@@ -24,6 +24,7 @@ use crate::{
     harness::{self, spec::LaunchHandler},
     ledger::Ledger,
     terminal_host,
+    tui::placeholder,
     viewer::Colors,
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -115,16 +116,25 @@ pub fn detached(
         (Some(LaunchHandler::ClaudeBackground), harness::Start::Background(command)) => {
             background(state, claude, policy, kind, dir, command)
         }
-        (Some(LaunchHandler::Terminal), harness::Start::Foreground(command)) => {
-            hosted(state, claude, policy, kind, dir, prompt, &owned, command)
-        }
-        (Some(LaunchHandler::CodexRemote), harness::Start::Foreground(command)) => {
-            host(state, kind, dir, prompt, &owned, command).and_then(|record| {
-                thread(
-                    state, claude, policy, kind, dir, prompt, &owned, since, &record,
-                )
-            })
-        }
+        (Some(LaunchHandler::Terminal), harness::Start::Foreground(command)) => hosted(
+            state,
+            claude,
+            policy,
+            placeholder(kind, &owned, dir, prompt),
+            prompt,
+            command,
+        ),
+        (Some(LaunchHandler::CodexRemote), harness::Start::Foreground(command)) => host(
+            state,
+            placeholder(kind, &owned, dir, prompt),
+            prompt,
+            command,
+        )
+        .and_then(|record| {
+            thread(
+                state, claude, policy, kind, dir, prompt, &owned, since, &record,
+            )
+        }),
         _ => bail!("{kind} has no detached launch"),
     };
     recovery(
@@ -141,6 +151,131 @@ pub fn detached(
         }),
     );
     result
+}
+
+/// Reopen the conversation `entry` names in a detached terminal host: the command the
+/// dashboard runs for Enter on a history row, hosted the way a terminal launch is, so a
+/// dashboard can attach to it later. Resume keeps the conversation's id, which is returned. A
+/// conversation already on the roster or held by a live run is refused, as the dashboard
+/// refuses it: message it instead.
+pub fn resume(
+    state: &Path,
+    policy: &Policy,
+    entry: &crate::history::Entry,
+    rows: &[Session],
+) -> Result<Launched> {
+    let id = &entry.key.session_id;
+    let kind = harness::by_name(&entry.key.harness)
+        .context("unknown history harness")?
+        .kind;
+    let ledger = Ledger::new(state)?;
+    ensure!(
+        !rows.iter().any(|s| s.native() == id)
+            // A client discovery still keys by its process is held by the host that opened it.
+            && !terminal_host::records(state)
+                .iter()
+                .any(|r| r.session.session_id == *id)
+            && !ledger.runs()?.iter().any(|r| {
+                r.terminal.is_none() && r.started.session_id.as_deref() == Some(id.as_str())
+            }),
+        "{id} is already running; `cones send` messages it"
+    );
+    // A removed row is hidden by id, which would keep the revived session out of the list.
+    ledger.unhide(id)?;
+    recovery(
+        state,
+        "resume.submitted",
+        json!({
+            "operation_id": id, "harness": kind.to_string(), "cwd": entry.cwd.to_string_lossy(),
+        }),
+    );
+    let command = harness::resume_history(entry, policy)?;
+    let record = host(state, crate::tui::history_session(entry), "", command)?;
+    let pid = record.session.pid;
+    let mut watch = Watch::new(kind, record);
+    let started = Instant::now();
+    while started.elapsed() < watch_for() {
+        watch.alive()?;
+        std::thread::sleep(POLL);
+    }
+    watch.alive()?;
+    Ok(Launched {
+        id: id.clone(),
+        identity: Identity::Native,
+        harness: kind.to_string(),
+        pid,
+    })
+}
+
+/// Fork the conversation `entry` names through the harness's native fork, in a detached
+/// terminal host, and record the parent once the child has an id of its own, so the
+/// dashboard lists the fork under it.
+pub fn fork(
+    state: &Path,
+    claude: &Path,
+    policy: &Policy,
+    entry: &crate::history::Entry,
+) -> Result<Launched> {
+    let spec = harness::by_name(&entry.key.harness)
+        .filter(|s| s.operations.fork.is_some())
+        .with_context(|| {
+            format!(
+                "{} has no verified native fork operation",
+                entry.key.harness
+            )
+        })?;
+    let kind = spec.kind;
+    // ponytail: a Codex fork is a daemon thread with no prompt to name it by, which only the
+    // dashboard identifies so far; teach `thread` a fork's rule to lift this.
+    ensure!(
+        spec.launch.as_ref().map(|l| l.handler) != Some(LaunchHandler::CodexRemote),
+        "{kind} forks are named only in the dashboard so far; fork it there"
+    );
+    let expected = (kind == HarnessKind::Pi).then(|| uuid::Uuid::new_v4().to_string());
+    let harness::Start::Foreground(command) = harness::fork(entry, expected.as_deref(), policy)?
+    else {
+        bail!("{kind} fork needs its own native client");
+    };
+    let owned = format!("{kind}:fork:{}", uuid::Uuid::new_v4());
+    let title = entry.title.as_deref().unwrap_or("fork");
+    let mut session = placeholder(kind, &owned, &entry.cwd, title);
+    session.forked_from = Some(entry.key.session_id.clone());
+    if kind == HarnessKind::Claude {
+        session.kind = Some("interactive".into());
+    }
+    recovery(
+        state,
+        "fork.submitted",
+        json!({
+            "operation_id": owned, "harness": kind.to_string(),
+            "cwd": entry.cwd.to_string_lossy(), "parent": entry.key.session_id,
+        }),
+    );
+    let launched = hosted(state, claude, policy, session, "", command)?;
+    let child = match launched.identity {
+        Identity::Native => Some(launched.id.clone()),
+        _ => expected,
+    };
+    match child {
+        Some(child) => crate::forks::record(
+            state,
+            crate::forks::Link {
+                harness: kind.to_string(),
+                home: entry.key.home.clone(),
+                cwd: entry.cwd.clone(),
+                parent: entry.key.session_id.clone(),
+                child,
+                parent_harness: None,
+            },
+        )
+        .context("the fork is running, but its parent was not recorded")?,
+        None => eprintln!(
+            "{kind} has reported no id for the fork yet, so the dashboard will not list it \
+             under {}",
+            entry.key.session_id
+        ),
+    }
+    Ok(launched)
 }
 
 /// Claude's `--bg` records the session with its daemon and returns; the daemon runs it.
@@ -214,18 +349,20 @@ pub fn start_background(kind: HarnessKind, command: &mut std::process::Command) 
 /// not this one. The host is the dashboard's, unchanged: it calls `setsid`, keeps the pty and
 /// the scrollback, and a dashboard attaches to it later. The prompt travels in the command's
 /// environment and the host binds it to stdin, so it must not be bound here.
-#[allow(clippy::too_many_arguments)]
 fn hosted(
     state: &Path,
     claude: &Path,
     policy: &Policy,
-    kind: HarnessKind,
-    dir: &Path,
+    session: Session,
     prompt: &str,
-    owned: &str,
     command: std::process::Command,
 ) -> Result<Launched> {
-    let record = host(state, kind, dir, prompt, owned, command)?;
+    let kind = harness::by_name(&session.harness)
+        .context("unknown harness")?
+        .kind;
+    let owned = session.session_id.clone();
+    let owned = owned.as_str();
+    let record = host(state, session, prompt, command)?;
     // Past here the native client is running. Failing to name it is a reporting failure and
     // never a reason to stop it: the host record names it for the dashboard either way. A
     // client that has already left is a different thing, and is reported as no launch at all.
@@ -360,20 +497,19 @@ impl Watch {
 /// Give the client a detached terminal host and return its record.
 fn host(
     state: &Path,
-    kind: HarnessKind,
-    dir: &Path,
+    session: Session,
     prompt: &str,
-    owned: &str,
     command: std::process::Command,
 ) -> Result<terminal_host::Record> {
     // ponytail: the launching terminal's size, or a plain default when there is none. The
     // host resizes on attach, so this only decides what the client renders before anyone looks.
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((120, 40));
+    let kind = session.harness.clone();
     terminal_host::launch(
         &std::env::current_exe().context("locating the cones executable")?,
         state,
         &command,
-        crate::tui::placeholder(kind, owned, dir, prompt),
+        session,
         prompt,
         rows,
         cols,
