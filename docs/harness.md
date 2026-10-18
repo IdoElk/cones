@@ -18,7 +18,7 @@ Kimi. The [command reference](cli.md#commands) has each verb's rules.
 | `ls` | ✓ | ✓ | ✓ | ✓ | Process only |
 | `show`, `search` | ✓ | ✓ | ✓ | ✓ | Copilot, Cursor; owned screens |
 | `launch` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `resume` | ✓ | ✓ | ✓ | ✓ | – |
+| `resume` | ✓ | ✓ | ✓ | ✓ | Copilot, Cursor |
 | `fork` | ✓ | Dashboard only | ✓ | ✓ | – |
 | `send` | ✓ | Daemon | Owned | Owned | – |
 | `wait` | ✓ | ✓ | ✓ | Owned | – |
@@ -366,6 +366,7 @@ before signaling it. The [CLI stop command](cli.md#stopping-a-session) has narro
 | Codex history | Unarchive if needed, then remote resume. | No history deletion. |
 | pi history | `pi --session <transcript>`. | Stop the resumed host; retain history. |
 | OpenCode history | `opencode --session <id>`. | Stop the resumed host; retain history. |
+| Copilot or Cursor history | `copilot --resume <id>` or `cursor-agent --resume <id>`. | Stop the resumed host; retain history. |
 
 Hosts retain process, screen and draft across dashboard closure, with one attachment at a time
 and ownership proven by a held lock. Host/machine restart ends their processes. Claude and
@@ -515,8 +516,8 @@ flag. No hooks or native configuration rewrites are installed. A session cones h
 read as its terminal screen with [`cones show`](cli.md#reading-a-conversation); one in a
 terminal cones does not own, with no saved conversation, has nothing cones can read.
 
-Copilot and Cursor Agent conversations are history and show only: listed in history and
-search and printed by `cones show`, with no state, usage, resume or fork. Both readers were
+Copilot and Cursor Agent conversations are listed in history and search, printed by
+`cones show` and resumed by their native id, with no state, usage or fork. Both readers were
 verified from files the installed CLIs had already written, with no model turn. Copilot is
 read from `session-state/ID/events.jsonl`; a live row names its conversation as `native_id`
 from the `inuse.PID.lock` the client holds, ignoring a lock older than the process. Cursor
@@ -537,8 +538,10 @@ keeps threads on its server and Kimi wrote no home.
 | Kimi | None; an instruction is refused | `--model` | 2.1.1 |
 
 Native boot, process identity, return/reuse and stop were checked with disposable homes.
-Model-backed turns, permission questions, live conversation reporting and opening a Copilot
-or Cursor history row in the dashboard remain unverified.
+Resume was checked against Copilot 1.0.95 and Cursor Agent 2026.09.18-9a7762b, each
+reopening a saved conversation with no model turn. Model-backed turns, permission questions,
+live conversation reporting and opening a Copilot or Cursor history row in the dashboard
+remain unverified.
 These are not full harness integrations. Kimi's `--prompt` answers and exits, and 2.1.1
 refuses it beside `--auto`, so Kimi starts only without an instruction. Kimi replaces its process title with `Kimi Code`,
 so management commands using that title cannot be distinguished. Tab/Left remain native;

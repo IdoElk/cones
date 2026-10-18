@@ -1413,7 +1413,6 @@ pub fn resume_history(
         }
         spec::Resume::SessionId => {
             check_operation(spec, &spec.operations.resume, "resume")?;
-            crate::opencode::require_session(&entry.transcript, &entry.key.session_id)?;
             let path = executable(&spec.name, &launch_path())
                 .with_context(|| format!("{} not found", spec.name))?;
             let mut c = std::process::Command::new(path);
@@ -1421,9 +1420,12 @@ pub fn resume_history(
                 &with_flags(&spec.commands.resume, flags),
                 &[("id", entry.key.session_id.as_ref())],
             )?)
-            .env("OPENCODE_DB", &entry.transcript)
-            .env(crate::opencode::reporting::ENABLE, "1")
             .current_dir(&entry.cwd);
+            if spec.kind == HarnessKind::Opencode {
+                crate::opencode::require_session(&entry.transcript, &entry.key.session_id)?;
+                c.env("OPENCODE_DB", &entry.transcript)
+                    .env(crate::opencode::reporting::ENABLE, "1");
+            }
             c
         }
     };
@@ -2470,7 +2472,11 @@ mod tests {
                 matches!(kind, HarnessKind::Copilot | HarnessKind::Cursor),
                 "{kind}: only verified archives are read"
             );
-            assert!(spec(kind).operations.resume.is_none());
+            assert_eq!(
+                spec(kind).operations.resume.is_some(),
+                matches!(kind, HarnessKind::Copilot | HarnessKind::Cursor),
+                "{kind}: only verified resumes are declared"
+            );
             assert!(spec(kind).operations.fork.is_none());
         }
     }

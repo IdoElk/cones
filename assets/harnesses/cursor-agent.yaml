@@ -35,6 +35,8 @@ operations:
       contains: [--help]
       error: "cursor-agent does not support the required native command"
       description: "cursor-agent: terminal launch; external sessions remain in their own terminals"
+  resume:
+    args: [--resume, "{id}"]
   message:
     unavailable: "it takes prompts at launch or headless with --print; nothing addresses a running interactive session"
 execution:

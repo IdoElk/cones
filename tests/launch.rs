@@ -1221,6 +1221,72 @@ fn resume_and_fork_reopen_a_conversation_detached_and_record_the_fork_s_parent()
     assert_eq!(links[0]["harness"], "pi");
 }
 
+/// Copilot and Cursor Agent resume a saved conversation by its id, as `copilot --resume ID`
+/// and `cursor-agent --resume ID` reopen it, in the folder it was recorded in.
+#[test]
+fn copilot_and_cursor_conversations_resume_by_their_native_id() {
+    for (harness, key) in [("copilot", "copilot"), ("cursor-agent", "cursor")] {
+        let f = Fixture::offering(key);
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_harness.py"),
+            f.path().join(".local/bin").join(harness),
+        )
+        .unwrap();
+        let id = "58585858-1111-4111-8111-111111111111";
+        let at = "2026-10-17T09:00:00.000Z";
+        let (transcript, lines) = if harness == "copilot" {
+            (
+                f.path()
+                    .join(format!(".copilot/session-state/{id}/events.jsonl")),
+                vec![
+                    serde_json::json!({"type": "session.start", "id": "e1", "timestamp": at,
+                        "data": {"sessionId": id, "startTime": at, "context": {"cwd": f.work}}}),
+                    serde_json::json!({"type": "user.message", "id": "e2", "timestamp": at,
+                        "data": {"content": "Sort the imports"}}),
+                ],
+            )
+        } else {
+            let meta = f
+                .path()
+                .join(format!(".cursor/chats/0123abcd/{id}/meta.json"));
+            fs::create_dir_all(meta.parent().unwrap()).unwrap();
+            fs::write(
+                &meta,
+                serde_json::json!({"schemaVersion": 1, "createdAtMs": 1789808119982u64,
+                    "hasConversation": true, "cwd": f.work})
+                .to_string(),
+            )
+            .unwrap();
+            (
+                f.path().join(format!(
+                    ".cursor/projects/work/agent-transcripts/{id}/{id}.jsonl"
+                )),
+                vec![serde_json::json!({"role": "user", "message": {"content": [
+                    {"type": "text", "text": "<user_query>\nSort the imports\n</user_query>"}]}})],
+            )
+        };
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        fs::write(
+            &transcript,
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+        )
+        .unwrap();
+
+        let out = f.cones("ok", &["resume", &id[..8]]);
+        assert!(out.status.success(), "{harness}: {}", stderr(&out));
+        assert_eq!(stdout(&out), id, "{harness}");
+        let hosted = f.hosted_pids();
+        assert_eq!(hosted.len(), 1, "{harness}: {hosted:?}");
+        assert!(alive(hosted[0]), "{harness}: the resumed client died");
+        assert!(
+            args_of(hosted[0]).contains(&format!(" --resume {id}")),
+            "{harness}: {}",
+            args_of(hosted[0])
+        );
+        assert_eq!(f.recovery()[0]["data"]["cwd"], f.work.to_str().unwrap());
+    }
+}
+
 #[test]
 fn a_fork_of_a_harness_with_no_native_fork_is_refused_before_anything_starts() {
     let f = Fixture::offering("pi");

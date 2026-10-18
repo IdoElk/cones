@@ -57,7 +57,7 @@ if name == "claude":
     print(f"backgrounded · {session[:8]} (idle)")
     sys.exit(0)
 
-if name in ("pi", "kimi", "copilot"):
+if name in ("pi", "kimi", "copilot", "cursor-agent"):
     if "--version" in args:
         print("0.0.0-fixture")
         sys.exit(0)
