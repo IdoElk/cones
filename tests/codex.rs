@@ -303,24 +303,28 @@ fn a_rollout_names_the_home_that_holds_it() {
     assert_eq!(home_of(Path::new("/tmp/loose.jsonl")), None);
 }
 
-/// A Codex fork and a resume from history pass the skip flag before `--`, where Codex still
-/// reads options, and leave it out when the setting is off. The `codex` here answers only the
-/// daemon's address and the fork probe; nothing is run.
+/// A remote Codex client refuses permission flags on resume and fork ("Permission overrides
+/// are not supported when resuming a remote task", Codex 0.154 to 0.163), so a resume from
+/// history passes none whatever the skip setting. A fork is made by the daemon instead, which
+/// takes the skip setting as the fork's approval and sandbox, and the client joins the thread
+/// it made. The `codex` here answers only the daemon's address and the fork probe.
 #[test]
-fn a_codex_fork_and_resume_follow_the_skip_permissions_setting() {
+fn a_codex_fork_takes_the_skip_setting_through_the_daemon_and_a_resume_passes_no_flag() {
     use cones::{config::Policy, harness, history};
     use std::os::unix::fs::PermissionsExt;
     const CHILD: &str = "CONES_CODEX_COMMAND_FIXTURE";
-    const FLAG: &str = "--dangerously-bypass-approvals-and-sandbox";
     if let Some(home) = std::env::var_os(CHILD) {
         let home = PathBuf::from(home);
+        let codex = home.join(".codex");
+        let calls = crate::stop::codex_daemon_in(&codex, &[]);
         let rollout = home.join("rollout.jsonl");
         fs::write(&rollout, format!("{CODEX_META}\n")).unwrap();
+        let id = "01a094e7-c194-7980-9804-34f24290597e";
         let entry = history::Entry {
             key: history::Key {
                 harness: "codex".into(),
-                home: home.join(".codex"),
-                session_id: "01a094e7-c194-7980-9804-34f24290597e".into(),
+                home: codex.clone(),
+                session_id: id.into(),
             },
             cwd: home.clone(),
             moved_to: None,
@@ -341,43 +345,75 @@ fn a_codex_fork_and_resume_follow_the_skip_permissions_setting() {
             harness::Start::Foreground(c) => args(&c),
             harness::Start::Background(_) => panic!("a Codex fork is a terminal client"),
         };
-        let remote = "unix:///tmp/cones-codex-fixture.sock";
-        let id = "01a094e7-c194-7980-9804-34f24290597e";
-        assert_eq!(
-            fork(&Policy::default()),
-            ["--remote", remote, "fork", FLAG, "--", id]
-        );
-        assert_eq!(
-            args(&harness::resume_history(&entry, &Policy::default()).unwrap()),
-            ["--remote", remote, "resume", FLAG, "--", id]
+        let forks = || -> Vec<serde_json::Value> {
+            calls
+                .lock()
+                .unwrap()
+                .drain(..)
+                .filter(|call| call["method"] == "thread/fork")
+                .map(|call| call["params"].clone())
+                .collect()
+        };
+        let remote = format!(
+            "unix://{}",
+            codex
+                .join("app-server-control/app-server-control.sock")
+                .display()
         );
         let prompting = Policy {
             codex_skip_permissions: Some(false),
             ..Policy::default()
         };
-        assert_eq!(fork(&prompting), ["--remote", remote, "fork", "--", id]);
-        assert_eq!(
-            args(&harness::resume_history(&entry, &prompting).unwrap()),
-            ["--remote", remote, "resume", "--", id]
-        );
+        for (policy, overrides) in [
+            (
+                &Policy::default(),
+                serde_json::json!({"approvalPolicy": "never", "sandbox": "danger-full-access"}),
+            ),
+            (&prompting, serde_json::json!({})),
+        ] {
+            assert_eq!(
+                fork(policy),
+                ["--remote", &remote, "resume", "--", crate::stop::FORK]
+            );
+            let mut expected =
+                serde_json::json!({"threadId": id, "cwd": home, "excludeTurns": true});
+            expected
+                .as_object_mut()
+                .unwrap()
+                .extend(overrides.as_object().unwrap().clone());
+            assert_eq!(forks(), [expected]);
+            assert_eq!(
+                args(&harness::resume_history(&entry, policy).unwrap()),
+                ["--remote", &remote, "resume", "--", id]
+            );
+        }
         println!("codex command fixture ran");
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    // Short: the daemon's socket lives under this folder and macOS bounds a socket path.
+    let dir = tempfile::Builder::new()
+        .prefix("cx-")
+        .tempdir_in("/tmp")
+        .unwrap();
     let bin = dir.path().join(".local/bin");
     fs::create_dir_all(&bin).unwrap();
     fs::create_dir_all(dir.path().join(".codex")).unwrap();
     let fake = bin.join("codex");
     fs::write(
         &fake,
-        "#!/bin/sh\ncase \"$*\" in\n  'app-server daemon start') echo '{\"socketPath\":\"/tmp/cones-codex-fixture.sock\"}' ;;\n  --help) echo 'fork  fork a thread' ;;\n  *) exit 91 ;;\nesac\n",
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  'app-server daemon start') echo '{{\"socketPath\":\"{}\"}}' ;;\n  --help) echo 'fork  fork a thread' ;;\n  *) exit 91 ;;\nesac\n",
+            dir.path()
+                .join(".codex/app-server-control/app-server-control.sock")
+                .display()
+        ),
     )
     .unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "codex::a_codex_fork_and_resume_follow_the_skip_permissions_setting",
+            "codex::a_codex_fork_takes_the_skip_setting_through_the_daemon_and_a_resume_passes_no_flag",
             "--nocapture",
         ])
         .env(CHILD, dir.path())

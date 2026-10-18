@@ -293,8 +293,8 @@ open it later. Neither takes a prompt; `cones comms send` gives the session work
 - **Fork** runs the harness's native fork and prints the fork's id, a
   [kind](#starting-a-session) as `launch` reports it. Once the fork has a native id, its
   parent is recorded and the dashboard lists it under that parent. A harness with no verified
-  native fork is refused. Codex forks are named only in the dashboard, so `cones fork`
-  refuses them.
+  native fork is refused. A Codex fork is a thread its daemon makes and names, so no terminal
+  is hosted for it; `cones send` gives it work and the dashboard joins it.
 
 ### Waiting on a session
 

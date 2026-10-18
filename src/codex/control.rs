@@ -1,12 +1,14 @@
-//! End, name or compact one thread over the already-running local Codex app-server, or trust a
-//! folder.
+//! End, name, compact or fork one thread over the already-running local Codex app-server, or
+//! trust a folder.
 //!
 //! Codex has no stop, rename or compact subcommand. Its app-server protocol interrupts a turn
 //! by id, closes the terminals a thread left running, names a thread the way its own `/rename`
 //! does, loaded or not, and compacts one the way its own `/compact` does; all of these keep the
-//! conversation. It also saves a folder's trust the way the client's own "Trust and continue"
-//! does. Nothing here starts a daemon or answers a request the daemon sends, and only a
-//! compaction loads a thread the daemon is not holding, as a client joining it would.
+//! conversation. It forks a thread the way `codex fork` does and answers with the new thread's
+//! id, taking the permission settings a remote `codex fork` refuses. It also saves a folder's
+//! trust the way the client's own "Trust and continue" does. Nothing here starts a daemon or
+//! answers a request the daemon sends, and only a compaction loads a thread the daemon is not
+//! holding, as a client joining it would.
 use super::runtime::{connect, remaining, send};
 use serde_json::{Value, json};
 use std::{
@@ -141,6 +143,23 @@ pub fn compact(home: &Path, thread: &str, within: Duration) -> io::Result<()> {
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// Fork `thread` into a new thread in `cwd` through `thread/fork`, which `codex fork` calls, and
+/// return the new thread's id. The daemon holds the fork from here, before any turn. `bypass`
+/// asks for the fork without approvals or sandbox, which a remote client refuses to pass:
+/// "Permission overrides are not supported when forking a remote task".
+pub fn fork(home: &Path, thread: &str, cwd: &Path, bypass: bool) -> io::Result<String> {
+    let mut params = json!({"threadId": thread, "cwd": cwd, "excludeTurns": true});
+    if bypass {
+        params["approvalPolicy"] = json!("never");
+        params["sandbox"] = json!("danger-full-access");
+    }
+    let forked = client(home, "cones_fork")?.call("thread/fork", params)?;
+    forked["thread"]["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| io::Error::other("thread/fork answered with no thread id"))
 }
 
 /// Save `dir` as trusted in the daemon's own config, as the client's trust question does when

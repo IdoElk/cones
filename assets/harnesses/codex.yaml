@@ -85,6 +85,8 @@ operations:
   attach:
     args: [--remote, "{remote}", resume, --, "{id}"]
   fork:
+    # The daemon makes the fork over `thread/fork`, since a remote `codex fork` refuses the
+    # skip flag, and the client joins it with `attach`. These args are not run.
     args: [--remote, "{remote}", fork, --, "{id}"]
     probe:
       args: [--help]

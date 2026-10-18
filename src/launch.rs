@@ -225,12 +225,9 @@ pub fn fork(
             )
         })?;
     let kind = spec.kind;
-    // ponytail: a Codex fork is a daemon thread with no prompt to name it by, which only the
-    // dashboard identifies so far; teach `thread` a fork's rule to lift this.
-    ensure!(
-        spec.launch.as_ref().map(|l| l.handler) != Some(LaunchHandler::CodexRemote),
-        "{kind} forks are named only in the dashboard so far; fork it there"
-    );
+    if spec.launch.as_ref().map(|l| l.handler) == Some(LaunchHandler::CodexRemote) {
+        return codex_fork(state, policy, entry);
+    }
     let expected = (kind == HarnessKind::Pi).then(|| uuid::Uuid::new_v4().to_string());
     let harness::Start::Foreground(command) = harness::fork(entry, expected.as_deref(), policy)?
     else {
@@ -276,6 +273,67 @@ pub fn fork(
         ),
     }
     Ok(launched)
+}
+
+/// A Codex fork is a thread the daemon makes and names in its reply, so no client is hosted:
+/// the daemon holds the fork as a launched thread is held once its client goes, and `cones
+/// send` gives it work. The thread is saved, so its row stays after the daemon lets it go.
+fn codex_fork(state: &Path, policy: &Policy, entry: &crate::history::Entry) -> Result<Launched> {
+    ensure!(
+        !entry.archived,
+        "resume an archived session before forking it"
+    );
+    let owned = format!("codex:fork:{}", uuid::Uuid::new_v4());
+    recovery(
+        state,
+        "fork.submitted",
+        json!({
+            "operation_id": owned, "harness": "codex",
+            "cwd": entry.cwd.to_string_lossy(), "parent": entry.key.session_id,
+        }),
+    );
+    let child = harness::codex_fork(entry, policy)?;
+    crate::forks::record(
+        state,
+        crate::forks::Link {
+            harness: "codex".into(),
+            home: entry.key.home.clone(),
+            cwd: entry.cwd.clone(),
+            parent: entry.key.session_id.clone(),
+            child: child.clone(),
+            parent_harness: None,
+        },
+    )
+    .context("the fork is running, but its parent was not recorded")?;
+    // The daemon writes the fork's rollout before it answers. Saved, the thread stays a row
+    // after the daemon lets it go, as a launched one does.
+    let saved = harness::codex_rollout(&entry.key.home, &child).and_then(|rollout| {
+        let first =
+            std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(&rollout)?))
+                .next()
+                .transpose()?
+                .unwrap_or_default();
+        let meta = crate::codex::meta(&first).context("the fork's rollout has no session_meta")?;
+        crate::codex::remember(
+            state,
+            crate::codex::Thread {
+                id: child.clone(),
+                cwd: meta.cwd,
+                started: meta.started,
+                rollout,
+            },
+        )?;
+        Ok(())
+    });
+    if let Err(error) = saved {
+        eprintln!("cones: could not save thread {child}: {error:#}");
+    }
+    Ok(Launched {
+        id: child,
+        identity: Identity::Native,
+        harness: "codex".into(),
+        pid: None,
+    })
 }
 
 /// Claude's `--bg` records the session with its daemon and returns; the daemon runs it.

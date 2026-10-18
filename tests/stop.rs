@@ -82,6 +82,10 @@ while True:
 
 /// `codex app-server daemon start` reporting the fixture home's control socket.
 const CODEX: &str = r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+    echo "fork  fork a previous session"
+    exit 0
+fi
 if [ "$1 $2 $3" = "app-server daemon start" ]; then
     echo "{\"socketPath\":\"$CODEX_HOME/app-server-control/app-server-control.sock\"}"
     exit 0
@@ -456,6 +460,9 @@ fn codex_thread(f: &Fixture, id: &str) -> PathBuf {
     rollout
 }
 
+/// The thread the stand-in daemon makes for every fork.
+pub(crate) const FORK: &str = "019a12fc-17d9-7af2-bc5a-92de2ec0f0f0";
+
 pub(crate) type Calls = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
 
 /// A stand-in app-server on the fixture's control socket, holding `loaded` with a turn in
@@ -476,11 +483,16 @@ pub(crate) fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
     let seen = Calls::default();
     let (calls, loaded) = (seen.clone(), json!(loaded));
     let idle = dir.join("idle");
+    let home = home.to_owned();
     std::thread::spawn(move || {
         // Polls left before each acknowledged request is reported done; None is still running.
         let (mut turn, mut terminal, mut compaction) = (None::<u8>, None::<u8>, None::<u8>);
         for stream in listener.incoming() {
-            let mut socket = tungstenite::accept(stream.unwrap()).unwrap();
+            // cones checks that a cached daemon address still accepts a connection by opening
+            // one and closing it, which is no handshake.
+            let Ok(mut socket) = tungstenite::accept(stream.unwrap()) else {
+                continue;
+            };
             while let Ok(Message::Text(text)) = socket.read() {
                 let request: serde_json::Value = serde_json::from_str(&text).unwrap();
                 calls.lock().unwrap().push(request.clone());
@@ -538,6 +550,23 @@ pub(crate) fn codex_daemon_in(home: &Path, loaded: &[&str]) -> Calls {
                         json!({})
                     }
                     "thread/name/set" => json!({}),
+                    // A fork is written before the reply, as Codex 0.163.0 writes it.
+                    "thread/fork" => {
+                        let params = &request["params"];
+                        let day = home.join("sessions/2026/10/12");
+                        fs::create_dir_all(&day).unwrap();
+                        let meta = json!({"timestamp": "2026-10-12T11:00:00.000Z",
+                            "type": "session_meta", "payload": {
+                            "id": FORK, "session_id": FORK, "forked_from_id": params["threadId"],
+                            "timestamp": "2026-10-12T11:00:00.000Z", "cwd": params["cwd"],
+                            "originator": "codex-tui", "cli_version": "0.163.0", "source": "vscode"}});
+                        fs::write(
+                            day.join(format!("rollout-2026-10-12T11-00-00-{FORK}.jsonl")),
+                            format!("{meta}\n"),
+                        )
+                        .unwrap();
+                        json!({"thread": {"id": FORK}})
+                    }
                     // A launch trusts its folder before the client starts.
                     "config/read" => json!({"config": {}}),
                     "config/batchWrite" => json!({}),
@@ -1431,6 +1460,56 @@ fn compact_refuses_a_claude_session_in_its_own_terminal() {
 /// A Codex thread is compacted through its daemon's `thread/compact/start`, which Codex's own
 /// `/compact` calls, after the daemon loads a thread it does not hold, and the command returns
 /// once the compaction's turn is listed completed.
+/// `cones fork` on a Codex thread asks the daemon for the fork, which answers with the new
+/// thread's id: no client is hosted and nothing is guessed. Under the default skip setting the
+/// fork skips approvals and the sandbox, which a remote `codex fork` refuses to pass. The
+/// parent is recorded and the fork is saved, so its row outlives the daemon's hold on it.
+#[test]
+fn fork_asks_the_codex_daemon_for_a_thread_and_records_its_parent() {
+    let f = Fixture::new();
+    let bin = f.root.path().join(".local/bin/codex");
+    fs::write(&bin, CODEX).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = "019a12fc-17d9-7af2-bc5a-92de2ec06073";
+    codex_thread(&f, id);
+    let calls = codex_daemon(&f, &[]);
+
+    let out = f.cones(&["fork", &id[..8]]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout).lines().last(), Some(FORK));
+    let forks: Vec<_> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|call| call["method"] == "thread/fork")
+        .map(|call| call["params"].clone())
+        .collect();
+    assert_eq!(
+        forks,
+        [
+            json!({"threadId": id, "cwd": f.root.path(), "excludeTurns": true,
+                "approvalPolicy": "never", "sandbox": "danger-full-access"})
+        ]
+    );
+    let links: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.state().join("forks.json")).unwrap()).unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 1, "{links}");
+    assert_eq!(links[0]["parent"], id);
+    assert_eq!(links[0]["child"], FORK);
+    assert_eq!(links[0]["harness"], "codex");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.state().join("codex-threads.json")).unwrap()).unwrap();
+    assert!(
+        saved.as_array().unwrap().iter().any(|t| t["id"] == FORK),
+        "{saved}"
+    );
+    assert!(
+        fs::read_dir(f.state().join("terminals"))
+            .map_or(true, |mut entries| entries.next().is_none()),
+        "a Codex fork hosts no client"
+    );
+}
+
 #[test]
 fn compact_compacts_a_codex_thread_through_its_daemon() {
     let f = Fixture::new();

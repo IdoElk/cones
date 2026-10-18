@@ -19,7 +19,7 @@ Kimi. The [command reference](cli.md#commands) has each verb's rules.
 | `show`, `search` | ✓ | ✓ | ✓ | ✓ | Copilot, Cursor; owned screens |
 | `launch` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `resume` | ✓ | ✓ | ✓ | ✓ | Copilot, Cursor |
-| `fork` | ✓ | Dashboard only | ✓ | ✓ | – |
+| `fork` | ✓ | ✓ | ✓ | ✓ | – |
 | `send` | ✓ | Daemon | Owned | Owned | – |
 | `wait` | ✓ | ✓ | ✓ | Owned | – |
 | `rename` | ✓ | ✓ | Owned | Owned | – |
@@ -372,7 +372,12 @@ Hosts retain process, screen and draft across dashboard closure, with one attach
 and ownership proven by a held lock. Host/machine restart ends their processes. Claude and
 Codex daemon sessions retain native ownership; closing an attach client leaves the session.
 History resumes in its recorded cwd/home. Forks create native identities in the same folder;
-Claude forks are interactive rather than background sessions.
+Claude forks are interactive rather than background sessions. A Codex fork is made by the
+daemon's `thread/fork`, which answers with the new thread, and a client joins it with remote
+resume. A remote Codex client refuses permission flags on resume and fork ("Permission
+overrides are not supported when resuming a remote task", 0.154 to 0.163), so a resumed thread
+keeps the settings it was started with, and the fork takes the
+[skip setting](jobs.md#composer-harnesses) as its approval policy and sandbox in that call.
 
 For native shell commands, invoke the binary directly: aliases adding flags can turn a Claude
 subcommand into a prompt. Removed Claude jobs remain in native resume history; forgotten Codex

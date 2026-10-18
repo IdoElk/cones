@@ -355,11 +355,14 @@ pub fn fork(entry: &crate::history::Entry, new_id: Option<&str>, policy: &Policy
     let path = executable(&spec.name, &launch_path())
         .with_context(|| format!("{} not found", spec.name))?;
     let mut command = if spec.kind == HarnessKind::Codex {
+        // The daemon makes the fork, with the permissions a remote `codex fork` refuses to pass,
+        // and the client joins it as it joins any thread the daemon holds.
+        let forked = codex_fork(&entry, policy)?;
         codex_client(
             &entry.key.home,
-            &entry.key.session_id,
+            &forked,
             &entry.cwd,
-            &template,
+            &spec.commands.attach,
             false,
         )?
     } else {
@@ -737,21 +740,37 @@ fn probe_harness(kind: HarnessKind, probe: &spec::Probe) -> Result<String> {
 
 /// Resume a thread against the daemon of the home that holds it, not the ambient one:
 /// a home pinned to another provider region keeps its own daemon and its own socket.
-pub fn codex_resume(
-    home: &Path,
-    id: &str,
-    cwd: &Path,
-    flags: &[String],
-) -> Result<std::process::Command> {
+/// A client resuming thread `id` through its home's daemon. It passes no permission flags: a
+/// remote client refuses them ("Permission overrides are not supported when resuming a remote
+/// task", Codex 0.154 to 0.163), and the thread keeps the settings it was started or forked with.
+pub fn codex_resume(home: &Path, id: &str, cwd: &Path) -> Result<std::process::Command> {
     let definition = spec(HarnessKind::Codex);
     check_operation(definition, &definition.operations.resume, "resume")?;
-    codex_client(
-        home,
-        id,
-        cwd,
-        &with_flags(&definition.commands.resume, flags),
-        false,
+    codex_client(home, id, cwd, &definition.commands.resume, false)
+}
+
+/// Fork the Codex thread `entry` names through its home's daemon, starting the daemon if it is
+/// not running, and return the new thread's id. The fork skips approvals and the sandbox when
+/// the skip-permissions setting is on, as a launch does.
+pub fn codex_fork(entry: &crate::history::Entry, policy: &Policy) -> Result<String> {
+    let definition = spec(HarnessKind::Codex);
+    check_operation(definition, &definition.operations.fork, "fork")?;
+    let path = executable("codex", &launch_path())
+        .ok_or_else(|| anyhow::anyhow!("codex not found on the launch PATH"))?;
+    codex_remote(&path, &entry.key.home)?;
+    crate::codex::control::fork(
+        &entry.key.home,
+        &entry.key.session_id,
+        &entry.cwd,
+        policy.skip_permissions_for(HarnessKind::Codex),
     )
+    .with_context(|| {
+        format!(
+            "forking codex thread {} through the daemon in {}",
+            entry.key.session_id,
+            entry.key.home.display()
+        )
+    })
 }
 
 fn codex_client(
@@ -1397,7 +1416,7 @@ pub fn resume_history(
             claude_resume(&entry.key.home, &entry.key.session_id, &entry.cwd, flags)?
         }
         spec::Resume::CodexRemote => {
-            codex_resume(&entry.key.home, &entry.key.session_id, &entry.cwd, flags)?
+            codex_resume(&entry.key.home, &entry.key.session_id, &entry.cwd)?
         }
         spec::Resume::Transcript => {
             check_operation(spec, &spec.operations.resume, "resume")?;
@@ -1859,13 +1878,12 @@ impl Harness for Codex {
         &self,
         session_id: &str,
         cwd: &Path,
-        policy: &Policy,
+        _policy: &Policy,
     ) -> Result<std::process::Command> {
         codex_resume(
             &crate::codex::home(&crate::fleet::claude_dir()?),
             session_id,
             cwd,
-            skip_permissions(HarnessKind::Codex, policy),
         )
     }
     fn attach(&self, session_id: &str, cwd: &Path) -> Result<std::process::Command> {
